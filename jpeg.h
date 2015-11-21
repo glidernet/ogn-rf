@@ -15,8 +15,9 @@
     GNU General Public License for more details.
 
     You should have received a copy of the GNU General Public License
-    along with Foobar.  If not, see <http://www.gnu.org/licenses/>.
+    along with this software.  If not, see <http://www.gnu.org/licenses/>.
 */
+
 #include <stdlib.h>
 #include <stdint.h>
 
@@ -31,22 +32,22 @@ class JPEG
           jmp_buf              ErrorJmp;
 
   public:
-   uint8_t *Data;      // compressed JPEG storage
-   size_t   Size;      // actuall JPEG size
+   uint8_t *Data;                                 // compressed JPEG storage
+   size_t   Size;                                 // actuall JPEG size
    uint32_t Valid;
 
   private:
-   size_t Allocated;   // allocated staorage
-   static const size_t AllocUnit = 8192; // storage will be allocated in blocks
+   size_t Allocated;                             // allocated staorage
+   static const size_t AllocUnit = 8192;         // storage will be allocated in blocks
 
   public:
-   int Quality;        // JPEG quality: 0..100
+   int Quality;                                  // JPEG quality: 0..100
 
   private:
-   size_t Reallocate(size_t NewSize)
+   size_t Reallocate(size_t NewSize)            // reallocate JPEG storage to a new (bigger) size
      { // printf("Reallocate(%d)\n", NewSize);
        Data=(uint8_t *)realloc(Data, NewSize);
-       if(Data==0) { Allocated=0; Size=0; return 0; }
+       if(Data==0) { Allocated=0; Size=0; return 0; } // return zero if not possible to reallocate
        return Allocated=NewSize; }
 
    static void BufferInit_(jpeg_compress_struct *Compress)
@@ -75,7 +76,7 @@ class JPEG
           void BufferTerminate(void)
      { Size=Allocated-DestinationManager.free_in_buffer; }
 
-   int Compress_(uint8_t *Image, int Width, int Height,
+   int Compress_(uint8_t *Image, int Width, int Height,                      // compress Image
                  J_COLOR_SPACE ColorSpace, int BytesPerPixel)
      { Compress.image_width      = Width;
        Compress.image_height     = Height;
@@ -103,7 +104,7 @@ class JPEG
        jpeg_create_compress(&Compress);
        Compress.client_data = this;
        Compress.dest = &DestinationManager;
-       DestinationManager.init_destination    = BufferInit_;
+       DestinationManager.init_destination    = BufferInit_;        // call-backs
        DestinationManager.empty_output_buffer = BufferFull_;
        DestinationManager.term_destination    = BufferTerminate_;
      }
@@ -112,13 +113,13 @@ class JPEG
      { jpeg_destroy_compress(&Compress);
        if(Data) free(Data); }
 
-   int Compress_MONO8(uint8_t *Image, int Width, int Height)
+   int Compress_MONO8(uint8_t *Image, int Width, int Height)        // compress a grey-scale image
      { return Compress_(Image, Width, Height, JCS_GRAYSCALE, 1); }
 
-   int Compress_RGB24(uint8_t *Image, int Width, int Height)
+   int Compress_RGB24(uint8_t *Image, int Width, int Height)        // compress an RGB image
      { return Compress_(Image, Width, Height, JCS_RGB, 3); }
 
-   int Write(char *FileName)
+   int Write(char *FileName)                                        // write compressed JPEG image to a file
      { if(Data==0) return 0;
        FILE *File = fopen(FileName, "wb"); if(File==0) return 0;
        size_t Written=fwrite(Data, 1, Size, File);

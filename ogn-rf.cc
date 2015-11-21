@@ -1,3 +1,23 @@
+/*
+    OGN - Open Glider Network - http://glidernet.org/
+    Copyright (c) 2015 The OGN Project
+
+    A detailed list of copyright holders can be found in the file "AUTHORS".
+
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this software.  If not, see <http://www.gnu.org/licenses/>.
+*/
+
 #include <stdio.h>
 #include <unistd.h>
 #include <math.h>
@@ -80,9 +100,14 @@ class RF_Acq                                    // acquire wideband (1MHz) RF da
 
   void Config_Defaults(void)
   { SampleRate=1000000;
-    CenterFreq=868300000; StartTime=0.400; SamplesPerRead=(850*SampleRate)/1000; Gain=600;
+    CenterFreq=868300000; StartTime=0.375; SamplesPerRead=(850*SampleRate)/1000; Gain=600;
     DeviceIndex=0; DeviceSerial[0]=0; OffsetTuning=0; FreqCorr=0;
     GSM_CenterFreq=GSM_LowEdge+GSM_ScanStep/2; GSM_Scan=1; GSM_SamplesPerRead=(250*SampleRate)/1000; GSM_Gain=200; }
+
+  int config_lookup_float_or_int(config_t *Config, const char *Path, double *Value)
+  { int Ret = config_lookup_float(Config, Path, Value); if(Ret==CONFIG_TRUE) return Ret;
+    int IntValue; Ret = config_lookup_int(Config, Path, &IntValue); if(Ret==CONFIG_TRUE) { (*Value) = IntValue; return Ret; }
+    return Ret; }
 
   int Config(config_t *Config)
   { config_lookup_int(Config,   "RF.FreqCorr",       &FreqCorr);
@@ -93,12 +118,13 @@ class RF_Acq                                    // acquire wideband (1MHz) RF da
     config_lookup_int(Config,   "RF.OfsTune",        &OffsetTuning);
 
     SampleRate=1000000;
-    config_lookup_int(Config, "RF.OGN.SampleRate", &SampleRate);
+    if(config_lookup_int(Config, "RF.OGN.SampleRate", &SampleRate)!=CONFIG_TRUE)
+    { double Rate; if(config_lookup_float(Config, "RF.OGN.SampleRate", &Rate)==CONFIG_TRUE) SampleRate=(int)floor(1e6*Rate+0.5); }
 
-    double InpGain= 60.0; config_lookup_float(Config, "RF.OGN.Gain",         &InpGain); Gain=(int)floor(InpGain*10+0.5);
-    double Freq=868.3;    config_lookup_float(Config, "RF.OGN.CenterFreq",   &Freq);    CenterFreq=(int)floor(Freq*1e6+0.5);
-           InpGain= 20.0; config_lookup_float(Config, "RF.GSM.Gain",         &InpGain); GSM_Gain=(int)floor(InpGain*10+0.5);
-           Freq=958.4;    config_lookup_float(Config, "RF.GSM.CenterFreq",   &Freq);    GSM_CenterFreq=(int)floor(Freq*1e6+0.5); GSM_Scan=0;
+    double InpGain= 60.0; config_lookup_float_or_int(Config, "RF.OGN.Gain",         &InpGain); Gain=(int)floor(InpGain*10+0.5);
+    double Freq=868.3;    config_lookup_float_or_int(Config, "RF.OGN.CenterFreq",   &Freq);    CenterFreq=(int)floor(Freq*1e6+0.5);
+           InpGain= 20.0; config_lookup_float_or_int(Config, "RF.GSM.Gain",         &InpGain); GSM_Gain=(int)floor(InpGain*10+0.5);
+           Freq=958.4;    config_lookup_float_or_int(Config, "RF.GSM.CenterFreq",   &Freq);    GSM_CenterFreq=(int)floor(Freq*1e6+0.5); GSM_Scan=0;
 
     config_lookup_float(Config, "RF.OGN.StartTime", &StartTime);
     double SensTime=0.850;
@@ -120,6 +146,7 @@ class RF_Acq                                    // acquire wideband (1MHz) RF da
 
    void *Exec(void)
    { // printf("RF_Acq.Exec() ... Start\n");
+     char Header[256];
      int Priority = Thr.getMaxPriority(); Thr.setPriority(Priority);
      while(!StopReq)
      { if(SDR.isOpen())                                                    // if device is already open
@@ -138,9 +165,10 @@ class RF_Acq                                    // acquire wideband (1MHz) RF da
            if(QueueSize()>1) printf("RF_Acq.Exec() ... Half time slot\n");
            // printf("RF_Acq.Exec() ... SDR.Read() => %d, Time=%16.3f, Freq=%6.1fMHz\n", Read, Buffer->Time, 1e-6*Buffer->Freq);
            if(Read>0) // RF data Read() successful
-           { while(RawDataQueue.Size())
+           { while(RawDataQueue.Size())                                       // when a raw data for this slot was requested
              { Socket *Client; RawDataQueue.Pop(Client);
-               Client->Send("HTTP/1.1 200 OK\r\nCache-Control: no-cache\r\nContent-Type: audio/basic\r\n\r\n");
+               sprintf(Header, "HTTP/1.1 200 OK\r\nCache-Control: no-cache\r\nContent-Type: audio/basic\r\nContent-Disposition: attachment; filename=\"time-slot-rf_%14.3f.u8\"\r\n\r\n", Buffer->Time);
+               Client->Send(Header);
                Client->Send(Buffer->Data, Buffer->Full);
                Client->SendShutdown(); Client->Close(); delete Client; }
              if(OutQueue.Size()<4) { OutQueue.Push(Buffer); }
@@ -245,7 +273,7 @@ template <class Float>
   ~Inp_FFT()
    { Thr.Cancel();
      if(Window) free(Window); }
-    
+
    double getCPU(void) // get CPU time for this thread
    {
 #if !defined(__MACH__)
@@ -486,14 +514,16 @@ template <class Float>
  class HTTP_Server
 { public:
 
-   int    Port;                   // listenning port
-   Thread Thr;                    // processing thread
+   int                 Port;      // listenning port
+   Thread              Thr;       // processing thread
    RF_Acq             *RF;        // pointer to RF acquisition
    GSM_FFT<Float>     *GSM;
+   char                Host[32];  // Host name
 
   public:
    HTTP_Server(RF_Acq *RF, GSM_FFT<Float> *GSM)
    { this->RF=RF; this->GSM=GSM;
+     Host[0]=0; SocketAddress::getHostName(Host, 32);
      Config_Defaults(); }
 
    void Config_Defaults(void)
@@ -559,8 +589,6 @@ template <class Float>
      { Status(Client); return; }
      else if( (strcmp(File, "/status.html")==0)         || (strcmp(File, "status.html")==0) )
      { Status(Client); return; }
-     // else if( (strcmp(File, "/spectrogram.jpg")==0)     || (strcmp(File, "spectrogram.jpg")==0) )
-     // { Demod->SpectrogramQueue.Push(Client); return; }
      else if( (strcmp(File, "/gsm-spectrogram.jpg")==0) || (strcmp(File, "gsm-spectrogram.jpg")==0) )
      { GSM->SpectrogramQueue.Push(Client); return; }
      else if( (strcmp(File, "/time-slot-rf.u8")==0)  || (strcmp(File, "time-slot-rf.u8")==0) )
@@ -582,39 +610,59 @@ Refresh: 5\r\n\
 <!DOCTYPE html>\r\n\
 <html>\r\n\
 ");
-     Client->Send("\
+     // time_t Now; time(&Now);
+     dprintf(Client->SocketFile, "\
 <title>RTLSDR-OGN RF processor " STR(VERSION) " status</title>\n\
-<b>RTLSDR OGN RF processor " STR(VERSION) " status</b><br /><br />\n\
-");
+<b>RTLSDR OGN RF processor " STR(VERSION) " status</b><br /><br />\n\n");
 
-     { dprintf(Client->SocketFile, "RF center frequency: %5.1fMHz, bandwidth: %3.1fMHz<br />\n", 1e-6*RF->CenterFreq, 1e-6*RF->SampleRate);
-       // dprintf(Client->SocketFile, "RF channels: [%d]<br />\n", Demod->Demod.Channels);
-       // dprintf(Client->SocketFile, "RF input noise: <b>%+3.1f</b>dB (ref. to internal noise of R820T with maximum gain)<br />\n",
-       //        10*log10(Demod->LastBkgNoise/RefBkgNoise) );
-       dprintf(Client->SocketFile, "RF frequency correction: <b>%+d</b>ppm (set in the USB receiver) <b>%+5.2f</b>ppm (measured against GSM reference)<br />\n",
-                  RF->FreqCorr, RF->GSM_FreqCorr);
-     }
+     dprintf(Client->SocketFile, "<table>\n<tr><th>System</th><th></th></tr>\n");
 
-     { Float Temperature;
-       if(getTemperature_RasberryPi(Temperature)>=0)
-         dprintf(Client->SocketFile, "CPU temperature: <b>%+3.1f</b>&#x2103;<br />\n", Temperature);
-     }
-
-     { Float Time, EstError, RefFreqCorr;
-       if(getNTP(Time, EstError, RefFreqCorr)>=0)
-       { dprintf(Client->SocketFile, "NTP est. error: <b>%3.1f</b>ms local clock correction: <b>%+5.2f</b>ppm<br />\n", 1e3*EstError, RefFreqCorr); }
-     }
+     dprintf(Client->SocketFile, "<tr><td>Host name</td><td align=right><b>%s</b></td></tr>\n", Host);
+     time_t Now; time(&Now);
+     struct tm TM; localtime_r(&Now, &TM);
+     dprintf(Client->SocketFile, "<tr><td>Local time</td><td align=right><b>%02d:%02d:%02d</b></td></tr>\n", TM.tm_hour, TM.tm_min, TM.tm_sec);
+     dprintf(Client->SocketFile, "<tr><td>Software</td><td align=right><b>" STR(VERSION) "</b></td></tr>\n");
 
 #ifndef __MACH__
-     { struct sysinfo SysInfo;
-       if(sysinfo(&SysInfo)>=0)
-       { dprintf(Client->SocketFile, "CPU load [1/5/15min]: <b>%3.1f/%3.1f/%3.1f</b><br />\n",
-                 SysInfo.loads[0]/65536.0, SysInfo.loads[1]/65536.0, SysInfo.loads[2]/65536.0);
-         dprintf(Client->SocketFile, "RAM [free/total]: <b>%3.1f/%3.1f</b>MB<br />\n",
-                 1e-6*SysInfo.freeram*SysInfo.mem_unit, 1e-6*SysInfo.totalram*SysInfo.mem_unit);
-       }
+     struct sysinfo SysInfo;
+     if(sysinfo(&SysInfo)>=0)
+     { dprintf(Client->SocketFile, "<tr><td>CPU load</td><td align=right><b>%3.1f/%3.1f/%3.1f</b></td></tr>\n",
+                                   SysInfo.loads[0]/65536.0, SysInfo.loads[1]/65536.0, SysInfo.loads[2]/65536.0);
+       dprintf(Client->SocketFile, "<tr><td>RAM [free/total]</td><td align=right><b>%3.1f/%3.1f MB</b></td></tr>\n",
+                                   1e-6*SysInfo.freeram*SysInfo.mem_unit, 1e-6*SysInfo.totalram*SysInfo.mem_unit);
      }
 #endif
+
+     float CPU_Temperature;
+     if(getTemperature_RasberryPi(CPU_Temperature)>=0)
+       dprintf(Client->SocketFile, "<tr><td>CPU temperature</td><td align=right><b>%+5.1f &#x2103;</b></td></tr>\n",    CPU_Temperature);
+
+     double NtpTime, EstError, RefFreqCorr;
+     if(getNTP(NtpTime, EstError, RefFreqCorr)>=0)
+     { time_t Time = floor(NtpTime);
+       struct tm TM; gmtime_r(&Time, &TM);
+       dprintf(Client->SocketFile, "<tr><td>NTP UTC time</td><td align=right><b>%02d:%02d:%02d</b></td></tr>\n", TM.tm_hour, TM.tm_min, TM.tm_sec);
+       dprintf(Client->SocketFile, "<tr><td>NTP est. error</td><td align=right><b>%3.1f ms</b></td></tr>\n", 1e3*EstError);
+       dprintf(Client->SocketFile, "<tr><td>NTP freq. corr.</td><td align=right><b>%+5.2f ppm</b></td></tr>\n", RefFreqCorr);
+     }
+
+     dprintf(Client->SocketFile, "<tr><th>RF</th><th></th></tr>\n");
+     dprintf(Client->SocketFile, "<tr><td>RF.Device</td><td align=right><b>%d</b></td></tr>\n",                       RF->DeviceIndex);
+     if(RF->DeviceSerial[0])
+       dprintf(Client->SocketFile, "<tr><td>RF.DeviceSerial</td><td align=right><b>%s</b></td></tr>\n",               RF->DeviceSerial);
+     dprintf(Client->SocketFile, "<tr><td>RF.FreqCorr</td><td align=right><b>%+3d ppm</b></td></tr>\n",               RF->FreqCorr);
+     dprintf(Client->SocketFile, "<tr><td>Fine calib. FreqCorr</td><td align=right><b>%+5.1f ppm</b></td></tr>\n",      RF->GSM_FreqCorr);
+     dprintf(Client->SocketFile, "<tr><td>RF.OGN.CenterFreq</td><td align=right><b>%5.1f MHz</b></td></tr>\n",   1e-6*RF->CenterFreq);
+     dprintf(Client->SocketFile, "<tr><td>RF.OGN.SampleRate</td><td align=right><b>%3.1f MHz</b></td></tr>\n",   1e-6*RF->SampleRate);
+     dprintf(Client->SocketFile, "<tr><td>RF.OGN.Gain</td><td align=right><b>%4.1f dB</b></td></tr>\n",           0.1*RF->Gain);
+     dprintf(Client->SocketFile, "<tr><td>RF.OGN.StartTime</td><td align=right><b>%5.3f sec</b></td></tr>\n",         RF->StartTime);
+     dprintf(Client->SocketFile, "<tr><td>RF.OGN.SensTime</td><td align=right><b>%5.3f sec</b></td></tr>\n", (double)(RF->SamplesPerRead)/RF->SampleRate);
+     dprintf(Client->SocketFile, "<tr><td>RF.GSM.CenterFreq</td><td align=right><b>%5.1f MHz</b></td></tr>\n",   1e-6*RF->GSM_CenterFreq);
+     dprintf(Client->SocketFile, "<tr><td>RF.GSM.Gain</td><td align=right><b>%4.1f dB</b></td></tr>\n",           0.1*RF->GSM_Gain);
+     dprintf(Client->SocketFile, "<tr><td>RF.GSM.SensTime</td><td align=right><b>%5.3f sec</b></td></tr>\n", (double)(RF->GSM_SamplesPerRead)/RF->SampleRate);
+
+
+     dprintf(Client->SocketFile, "</table>\n");
 
      Client->Send("\
 <br />\r\n\

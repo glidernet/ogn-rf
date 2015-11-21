@@ -1,0 +1,23 @@
+0.2.4 (October 2015)
+- Introduce UseAsWhitelist parameter for strict opt-in using data from OGN DDB.
+- Provide hardware and software version of received device.
+- Add more precision to Latitude and Longitude in APRS messages.
+- Add error correction of radio messages.
+- Allow integer as config gain value.
+- Allow float as config GeoidSepar value.
+- Fix bug about incorrect altitude of 65500m.
+- Fix bug about turn rate.
+- Other minor fixes and enhancement.
+
+0.2.3 (June 2015)
+- Bug fixed in default setup which was reducing sensitivity.
+- Introduce adaptive algorithm to send positions to APRS.
+- Send arch info in version to APRS server.
+- Nothing changed on ogn-rf side.
+- Code cleanup.
+
+0.2.2 (April 2015)
+- Source code of public part of receiver is released
+
+0.2.0 (March 2015)
+- First version compatible with Flarm v6 recent changes in radio protocol

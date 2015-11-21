@@ -1,6 +1,6 @@
-VERSION = 0.2.2
+VERSION = 0.2.4
 
-USE_RPI_GPU_FFT = 1
+# USE_RPI_GPU_FFT = 1
 
 FLAGS = -Wall -O3 -ffast-math -DVERSION=$(VERSION)
 LIBS  = -lpthread -lm -ljpeg -lconfig -lrt

@@ -15,8 +15,9 @@
     GNU General Public License for more details.
 
     You should have received a copy of the GNU General Public License
-    along with Foobar.  If not, see <http://www.gnu.org/licenses/>.
+    along with this software.  If not, see <http://www.gnu.org/licenses/>.
 */
+
 #include <stdio.h>
 
 // =========================================================================================
@@ -111,9 +112,11 @@ class SocketAddress                    // IP address and port
      { return inet_ntoa(Address.sin_addr); }
 
    // get my own host name
-   char *getHostName(void)
-     { if(gethostname(TmpString, TmpStringLen)<0) return 0;
-       return TmpString; }
+   char *getHostName(void) { return getHostName(TmpString, TmpStringLen); }
+
+   static char *getHostName(char *Name, int NameLen)
+     { if(gethostname(Name, NameLen)<0) return 0;
+       return Name; }
 
    // get the "IP:port" ASCII string, IP will be numeric
    char *getIPColonPort(void)

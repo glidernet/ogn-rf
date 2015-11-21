@@ -15,8 +15,9 @@
     GNU General Public License for more details.
 
     You should have received a copy of the GNU General Public License
-    along with Foobar.  If not, see <http://www.gnu.org/licenses/>.
+    along with this software.  If not, see <http://www.gnu.org/licenses/>.
 */
+
 #ifndef __IMAGE_H__
 #define __IMAGE_H__
 
@@ -80,6 +81,13 @@ template <class Type=float>
      { if(Allocated) { free(Data); Allocated=0; }
        Data=ExtImage; Width=ExtWidth; Height=ExtHeight;
        return Size=Width*Height; }
+
+// -----------------------------------------------------------------------------
+
+   bool  isPixel(int X, int Y) const         { return (X>=0) && (X<Width) && (Y>=0) && (Y<=Height); }
+   void setPixel(int X, int Y, Type Value)   { Data[Y*Width+X]=Value; }
+   Type getPixel(int X, int Y) const         { return Data[Y*Width+X]; }
+   Type incPixel(int X, int Y, Type Value=1) { return Data[Y*Width+X]+=Value; }
 
 // -----------------------------------------------------------------------------
 
@@ -210,7 +218,7 @@ template <class Type=float>
        fclose(File); return Size; }
 
    int WriteJPG_8bpp(FILE *File, int Quality=80, Type LogRef=0, Type Scale=1, Type Bias=0) const
-     { 
+     {
        struct jpeg_compress_struct JpegCompress;
        struct jpeg_error_mgr       JpegErrorManager;
               jmp_buf              JpegErrorJmp;
@@ -232,16 +240,16 @@ template <class Type=float>
          return -1; }
 
        uint8_t Line[Width];
-       for(int Row=0; Row<Height; Row++)
+       for(int Row=0; Row<Height; Row++)     // loop over image lines
        { Type *Img = Data+(Row*Width);
-         for(int Col=0; Col<Width; Col++)
+         for(int Col=0; Col<Width; Col++)    // loop over pixels in a line
          { Type Pixel=(*Img++);
-           if(LogRef)
+           if(LogRef)                        // logarythimc pixel rescale
            { if(Pixel) { Pixel=logf((float)Pixel/LogRef); Pixel = Pixel*Scale + Bias; }
-             else Pixel=0; }
-           else
+             else Pixel=0; }                 //
+           else                              // linear pixel rescale
            { Pixel = Pixel*Scale + Bias; }
-           if(Pixel<0x00) Pixel=0x00;
+           if(Pixel<0x00) Pixel=0x00;        // limit to 8 bits
            else if(Pixel>0xFF) Pixel=0xFF;
            Line[Col]=(uint8_t)Pixel; }
          uint8_t *RowPtr=Line;
