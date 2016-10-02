@@ -40,6 +40,9 @@
 #include "socket.h"
 #include "sysmon.h"
 
+#include "pulsefilter.h"
+#include "tonefilter.h"
+
 // ==================================================================================================
 
 template <class Float> // scale floating-point data to 8-bit gray scale image
@@ -64,14 +67,24 @@ template <class Float> // scale floating-point data to 8-bit gray scale image
 
 class RF_Acq                                    // acquire wideband (1MHz) RF data thus both OGN frequencies at same time
 { public:
-                int SampleRate;                 // [Hz] sampling rate
-                int Gain;                       // [0.1dB] Rx gain for OGN reception
-                int CenterFreq;                 // [Hz] center acquisition frequency: can be 868.3+/-0.2 MHz
-                double StartTime;               // [sec] when to start acquisition on the center frequency
-                int SamplesPerRead;             // [samples] should correspond to about 800 ms of data and be a multiple of 256
-                                                // the goal is to listen on center frequency from 0.3 to 1.1 sec
+   int    SampleRate;                           // [Hz] sampling rate
+
+   int    OGN_GainMode;                         // 0=Auto, 1=Manual, 2=Linearity, 3=Sensitivity
+   int    OGN_Gain;                             // [0.1dB] Rx gain for OGN reception
+   int    OGN_CenterFreq;                       // [Hz] center acquisition frequency: can be 868.3+/-0.2 MHz
+   double OGN_StartTime;                        // [sec] when to start acquisition on the center frequency
+   int    OGN_SamplesPerRead;                   // [samples] should correspond to about 800 ms of data and be a multiple of 256
+                                                // the goal is to listen on center frequency from 0.4 to 1.2 sec
+   int    OGN_SaveRawData;
+   const static uint32_t OGN_RawDataSync = 0x254F7D01;
+
+                                                // for frequency hopping
+   // int              FreqBase;                   // [Hz] for Australia: 917.0MHz, for USA: 902.2MHz
+   static const int FreqHopChannelWidth = 400000;  // [Hz] 0.4MHz per channel
+   int              OGN_FreqHopChannels;           // [number] Australia: 24, USA: 65
+
    int  DeviceIndex;                            // rtl-sdr device index
-   char DeviceSerial[12];                       // serial number of the rtl-sdr device to be selected
+   char DeviceSerial[64];                       // serial number of the rtl-sdr device to be selected
    int  OffsetTuning;                           // [bool] this option might be good for E4000 tuner
    int  FreqCorr;                               // [ppm] frequency correction applied to the Rx chip
    RTLSDR SDR;                                  // SDR receiver (DVB-T stick)
@@ -80,6 +93,9 @@ class RF_Acq                                    // acquire wideband (1MHz) RF da
    Thread Thr;                                  // acquisition thread
    volatile int StopReq;                        // request to stop the acquisition thread
 
+   PulseFilter PulseFilt;
+
+   static const int GSM_GainMode = 1;           // Manual gain mode for GSM
    int GSM_Gain;                                // [0.1dB] Rx gain for GSM frequency calibration
    int GSM_CenterFreq;                          // [Hz] should be selected to cover at lease one broadcast channel in the area
    int GSM_Scan;                                // [bool] scan around the whole GSM band
@@ -92,15 +108,22 @@ class RF_Acq                                    // acquire wideband (1MHz) RF da
 
    MessageQueue<Socket *>  RawDataQueue;        // sockets send to this queue should be written with a most recent raw data
 
+  public:
    RF_Acq() { Config_Defaults();
               GSM_FreqCorr=0;
+              // PulseBox.Preset(PulseBoxSize);
               StopReq=0; Thr.setExec(ThreadExec); }
 
   ~RF_Acq() { }
 
   void Config_Defaults(void)
   { SampleRate=1000000;
-    CenterFreq=868300000; StartTime=0.375; SamplesPerRead=(850*SampleRate)/1000; Gain=600;
+    OGN_CenterFreq=868300000;
+    OGN_StartTime=0.375; OGN_SamplesPerRead=(850*SampleRate)/1000;
+    OGN_GainMode=1; OGN_Gain=600;
+    OGN_FreqHopChannels=0;
+    OGN_SaveRawData=0;
+    PulseFilt.Threshold=0;
     DeviceIndex=0; DeviceSerial[0]=0; OffsetTuning=0; FreqCorr=0;
     GSM_CenterFreq=GSM_LowEdge+GSM_ScanStep/2; GSM_Scan=1; GSM_SamplesPerRead=(250*SampleRate)/1000; GSM_Gain=200; }
 
@@ -110,26 +133,40 @@ class RF_Acq                                    // acquire wideband (1MHz) RF da
     return Ret; }
 
   int Config(config_t *Config)
-  { config_lookup_int(Config,   "RF.FreqCorr",       &FreqCorr);
+  { double Corr=0.0;
+    config_lookup_float_or_int(Config,   "RF.FreqCorr", &Corr); FreqCorr = (int)floor(Corr+0.5);
     config_lookup_int(Config,   "RF.Device",         &DeviceIndex);
     const char *Serial = 0;
     config_lookup_string(Config,"RF.DeviceSerial",   &Serial);
-    if(Serial) { strncpy(DeviceSerial, Serial, 12); DeviceSerial[11]=0; }
+    if(Serial) { strncpy(DeviceSerial, Serial, 64); DeviceSerial[63]=0; }
     config_lookup_int(Config,   "RF.OfsTune",        &OffsetTuning);
+    config_lookup_int(Config,   "RF.OGN.GainMode",   &OGN_GainMode);
+
+    config_lookup_int(Config,   "RF.OGN.SaveRawData",   &OGN_SaveRawData);
 
     SampleRate=1000000;
     if(config_lookup_int(Config, "RF.OGN.SampleRate", &SampleRate)!=CONFIG_TRUE)
-    { double Rate; if(config_lookup_float(Config, "RF.OGN.SampleRate", &Rate)==CONFIG_TRUE) SampleRate=(int)floor(1e6*Rate+0.5); }
+    { double Rate;
+      if(config_lookup_float(Config, "RF.OGN.SampleRate", &Rate)==CONFIG_TRUE) SampleRate=(int)floor(1e6*Rate+0.5);
+      else if(config_lookup_int(Config, "RF.SampleRate", &SampleRate)!=CONFIG_TRUE)
+      { if(config_lookup_float(Config, "RF.SampleRate", &Rate)==CONFIG_TRUE) SampleRate=(int)floor(1e6*Rate+0.5); }
+    }
 
-    double InpGain= 60.0; config_lookup_float_or_int(Config, "RF.OGN.Gain",         &InpGain); Gain=(int)floor(InpGain*10+0.5);
-    double Freq=868.3;    config_lookup_float_or_int(Config, "RF.OGN.CenterFreq",   &Freq);    CenterFreq=(int)floor(Freq*1e6+0.5);
+    double InpGain= 60.0; config_lookup_float_or_int(Config, "RF.OGN.Gain",         &InpGain); OGN_Gain=(int)floor(InpGain*10+0.5);
+    double Freq=868.3;    config_lookup_float_or_int(Config, "RF.OGN.CenterFreq",   &Freq);    OGN_CenterFreq=(int)floor(Freq*1e6+0.5);
            InpGain= 20.0; config_lookup_float_or_int(Config, "RF.GSM.Gain",         &InpGain); GSM_Gain=(int)floor(InpGain*10+0.5);
            Freq=958.4;    config_lookup_float_or_int(Config, "RF.GSM.CenterFreq",   &Freq);    GSM_CenterFreq=(int)floor(Freq*1e6+0.5); GSM_Scan=0;
 
-    config_lookup_float(Config, "RF.OGN.StartTime", &StartTime);
+    OGN_FreqHopChannels=0;
+    config_lookup_int(Config, "RF.OGN.FreqHopChannels",  &OGN_FreqHopChannels);
+
+    PulseFilt.Threshold=0;
+    config_lookup_int(Config, "RF.PulseFilter.Threshold",  &PulseFilt.Threshold);
+
+    config_lookup_float(Config, "RF.OGN.StartTime", &OGN_StartTime);
     double SensTime=0.850;
     config_lookup_float(Config, "RF.OGN.SensTime",  &SensTime);
-    SamplesPerRead=(int)floor(SensTime*SampleRate+0.5);
+    OGN_SamplesPerRead=(int)floor(SensTime*SampleRate+0.5);
            SensTime=0.250;
     config_lookup_float(Config, "RF.GSM.SensTime",  &SensTime);
     GSM_SamplesPerRead=(int)floor(SensTime*SampleRate+0.5);
@@ -148,20 +185,39 @@ class RF_Acq                                    // acquire wideband (1MHz) RF da
    { // printf("RF_Acq.Exec() ... Start\n");
      char Header[256];
      int Priority = Thr.getMaxPriority(); Thr.setPriority(Priority);
+     int CurrCenterFreq = OGN_CenterFreq;
      while(!StopReq)
      { if(SDR.isOpen())                                                    // if device is already open
        { double Now  = SDR.getTime();
-         int    IntTimeNow = (int)floor(Now); int ReadGSM = (IntTimeNow%10) == 0; // do the GSM calibration every 10 seconds
+         int    IntTimeNow = (int)floor(Now); int ReadGSM = (IntTimeNow%20) == 0; // do the GSM calibration every 20 seconds
+
+         int NextCenterFreq = OGN_CenterFreq;
+         if(OGN_FreqHopChannels)
+         { int Channel = FreqHopChannel1(IntTimeNow+1);
+           NextCenterFreq += FreqHopChannelWidth*Channel; }
+
          double FracTimeNow = Now-IntTimeNow;
-         double WaitTime = StartTime-FracTimeNow; if(WaitTime<0) WaitTime+=1.0;
-         int SamplesToRead=SamplesPerRead;
+         double WaitTime = OGN_StartTime-FracTimeNow; if(WaitTime<0) WaitTime+=1.0;
+         int SamplesToRead=OGN_SamplesPerRead;
          if( ReadGSM || (QueueSize()>1) ) SamplesToRead/=2; // when GSM calibration or data is not being processed fast enough we only read half-time
          if(WaitTime<0.200)
          { usleep((int)floor(1e6*WaitTime+0.5));                              // wait right before the time slot starts
            SampleBuffer<uint8_t> *Buffer = OutQueue.New();                    // get the next buffer to fill with raw I/Q data
            SDR.ResetBuffer();                                                 // needed before every Read()
            int Read=SDR.Read(*Buffer, SamplesToRead);                         // read the time slot raw RF data
-           Buffer->Freq += CenterFreq * (1e-6*GSM_FreqCorr);                  // correct the frequency (sign ?)
+           Buffer->Freq += CurrCenterFreq * (1e-6*GSM_FreqCorr);              // correct the frequency (sign ?)
+           if(OGN_SaveRawData>0)
+           { time_t Time=(time_t)floor(Buffer->Time);
+             struct tm *TM = gmtime(&Time);
+             char FileName[32]; sprintf(FileName, "OGNraw_%04d.%02d.%02d.u8", 1900+TM->tm_year, TM->tm_mon+1, TM->tm_mday);
+             FILE *File=fopen(FileName, "ab");
+             if(File)
+             { SerializeWriteSync(File, OGN_RawDataSync);
+               Buffer->Serialize(File);
+               fclose(File);
+               OGN_SaveRawData--; }
+           }
+           PulseFilt.Process(*Buffer);
            if(QueueSize()>1) printf("RF_Acq.Exec() ... Half time slot\n");
            // printf("RF_Acq.Exec() ... SDR.Read() => %d, Time=%16.3f, Freq=%6.1fMHz\n", Read, Buffer->Time, 1e-6*Buffer->Freq);
            if(Read>0) // RF data Read() successful
@@ -176,8 +232,11 @@ class RF_Acq                                    // acquire wideband (1MHz) RF da
            } else     // RF data Read() failed
            { SDR.Close(); printf("RF_Acq.Exec() ... SDR.Read() failed => SDR.Close()\n"); continue; }
            if(ReadGSM) // if we are to read GSM in the second half-slot
-           { SDR.setTunerGain(GSM_Gain);             // setup for the GSM reception
-             SDR.setCenterFreq(GSM_CenterFreq);
+           { SDR.setCenterFreq(GSM_CenterFreq);      // setup for the GSM reception
+             SDR.setTunerGainMode(GSM_GainMode);
+             SDR.setTunerGain(GSM_Gain);
+             GSM_FreqCorr-=(FreqCorr-SDR.getFreqCorrection());
+             SDR.setFreqCorrection(FreqCorr);
              SampleBuffer<uint8_t> *Buffer = GSM_OutQueue.New();
              SDR.ResetBuffer();
              int Read=SDR.Read(*Buffer, GSM_SamplesPerRead);
@@ -186,30 +245,134 @@ class RF_Acq                                    // acquire wideband (1MHz) RF da
              { if(GSM_OutQueue.Size()<3) GSM_OutQueue.Push(Buffer);
                                   else { GSM_OutQueue.Recycle(Buffer); printf("RF_Acq.Exec() ... Dropped a GSM batch\n"); }
              }
-             SDR.setTunerGain(Gain);                // back to OGN reception setup
-             SDR.setCenterFreq(CenterFreq);
+             SDR.setTunerGainMode(OGN_GainMode);
+             SDR.setTunerGain(OGN_Gain);                // back to OGN reception setup
              if(GSM_Scan)
              { GSM_CenterFreq+=GSM_ScanStep;
                if(GSM_CenterFreq>=GSM_UppEdge) GSM_CenterFreq=GSM_LowEdge+GSM_ScanStep/2;
              }
            }
+           if(ReadGSM | OGN_FreqHopChannels)
+           { SDR.setCenterFreq(NextCenterFreq); CurrCenterFreq=NextCenterFreq; }
          }
          else usleep(100000);
        }
-       else                                                                // if not open yet
+       else                                                                // if not open yet or was closed due to an error
        { int Index=(-1);
          if(DeviceSerial[0]) Index=SDR.getDeviceIndexBySerial(DeviceSerial);
          if(Index<0) Index=DeviceIndex;
-         if(SDR.Open(Index, CenterFreq, SampleRate)<0)                    // try to open it
+         if(SDR.Open(Index, OGN_CenterFreq, SampleRate)<0)                    // try to open it
          { printf("RF_Acq.Exec() ... SDR.Open(%d, , ) fails, retry after 1 sec\n", Index); usleep(1000000); }
          else
-         { SDR.setOffsetTuning(OffsetTuning); SDR.setFreqCorrection(FreqCorr); SDR.setTunerGainManual(); SDR.setTunerGain(Gain); }
+         { SDR.setOffsetTuning(OffsetTuning);
+           SDR.setTunerGainMode(OGN_GainMode);
+           SDR.setTunerGain(OGN_Gain); }
+           SDR.setFreqCorrection(FreqCorr);
        }
      }
 
      SDR.Close();
      // printf("RF_Acq.Exec() ... Stop\n");
      return  0; }
+
+   uint32_t FreqHopHash(uint32_t Time)
+   { Time  = (Time<<15) + (~Time);
+     Time ^= Time>>12;
+     Time += Time<<2;
+     Time ^= Time>>4;
+     Time *= 2057;
+     return Time ^ (Time>>16); }
+
+   uint16_t FreqHopChannel1(uint32_t Time)
+   { return FreqHopHash((Time<<1)  )%OGN_FreqHopChannels; }
+
+   uint16_t FreqHopChannel2(uint32_t Time)
+   { return FreqHopHash((Time<<1)+1)%OGN_FreqHopChannels; }
+
+} ;
+
+// ==================================================================================================
+
+template <class Float>
+ class Inp_Filter
+{ public:
+
+   Thread Thr;                                      // processing thread
+   volatile int StopReq;
+   RF_Acq *RF;
+
+   int              Enable;
+   ToneFilter<Float> ToneFilt;
+
+   ReuseObjectQueue< SampleBuffer< std::complex<Float> > > OutQueue;
+
+  public:
+
+   Inp_Filter(RF_Acq *RF)
+   { this->RF=RF; Config_Defaults(); Preset(); }
+
+   void Config_Defaults(void)
+   { Enable  = 0; ToneFilt.FFTsize = 32768; ToneFilt.Threshold=32; }
+
+   int Config(config_t *Config)
+   { config_lookup_int(Config,   "RF.ToneFilter.Enable",    &Enable);
+     config_lookup_int(Config,   "RF.ToneFilter.FFTsize",   &ToneFilt.FFTsize);
+     config_lookup_float(Config, "RF.ToneFilter.Threshold", &ToneFilt.Threshold);
+     return 0; }
+
+   int Preset(void) { return ToneFilt.Preset(); }
+
+   int QueueSize(void) { return OutQueue.Size(); }
+   void Start(void)
+   { StopReq=0; Thr.setExec(ThreadExec); Thr.Create(this); }
+
+  ~Inp_Filter()
+   { Thr.Cancel(); }
+
+   double getCPU(void) // get CPU time for this thread
+   {
+#if !defined(__MACH__)
+       struct timespec now; clock_gettime(CLOCK_THREAD_CPUTIME_ID, &now); return now.tv_sec + 1e-9*now.tv_nsec;
+#else
+       return 0;
+#endif
+   }
+
+   static void *ThreadExec(void *Context)
+   { Inp_Filter<Float> *This = (Inp_Filter<Float> *)Context; return This->Exec(); }
+
+   void *Exec(void)
+   { // printf("Inp_Filter.Exec() ... Start\n");
+     while(!StopReq)
+     { if(!Enable) { sleep(1); continue; }
+       double ExecTime=getCPU();
+       SampleBuffer<uint8_t> *InpBuffer = RF->OutQueue.Pop();   // here we wait for a new data batch
+       // printf("Inp_Filter.Exec() ... Input(%5.3fMHz, %5.3fsec, %dsamples)\n", 1e-6*InpBuffer->Freq, InpBuffer->Time, InpBuffer->Full/2);
+       SampleBuffer< std::complex<Float> > *OutBuffer = OutQueue.New();
+       ToneFilt.Process(OutBuffer, InpBuffer);
+       RF->OutQueue.Recycle(InpBuffer);                         // let the input buffer go free
+       // printf("Inp_Filter.Exec() ... Output(%5.3fMHz, %5.3fsec, %dsamples)\n", 1e-6*OutBuffer->Freq, OutBuffer->Time, OutBuffer->Full/2);
+       if(OutQueue.Size()<4) { OutQueue.Push(OutBuffer); }
+                        else { OutQueue.Recycle(OutBuffer); printf("Inp_Filter.Exec() ... Dropped a slot\n"); }
+       ExecTime=getCPU()-ExecTime; // printf("Inp_FFT.Exec() ... %5.3fsec\n", ExecTime);
+     }
+     // printf("Inp_FFT.Exec() ... Stop\n");
+     return 0; }
+
+   // classical sliding box filter - calc. the sum within box of 2*Radius+1
+   static void BoxSum(Float *Output, Float *Input, int Size, int Radius)
+   { int BoxSize=2*Radius+1;
+     Float Sum=0; int InpIdx=0; int OutIdx=0;
+     for( ; InpIdx<Radius; InpIdx++)
+     { Sum+=Input[InpIdx]; }
+     for( ; InpIdx<BoxSize; InpIdx++)
+     { Sum+=Input[InpIdx]; Output[OutIdx++]=Sum; }
+     for( ; InpIdx<Size; InpIdx++)
+     { Sum+=Input[InpIdx]-Input[InpIdx-BoxSize]; Output[OutIdx++]=Sum; }
+     for( ; OutIdx<Size; )
+     { Sum-=Input[InpIdx-BoxSize]; Output[OutIdx++]=Sum; }
+   }
+
 
 } ;
 
@@ -222,6 +385,7 @@ template <class Float>
    Thread Thr;                                      // processing thread
    volatile int StopReq;
    RF_Acq *RF;
+   Inp_Filter<Float> *Filter;
 
    int              FFTsize;
 #ifdef USE_RPI_GPU_FFT
@@ -234,10 +398,11 @@ template <class Float>
    SampleBuffer< std::complex<Float> > OutBuffer;
    int  OutPipe;
    char OutPipeName[32];
+   const static uint32_t OutPipeSync = 0x254F7D00 + sizeof(Float);
 
   public:
-   Inp_FFT(RF_Acq *RF)
-   { Window=0; this->RF=RF; Preset(); OutPipe=(-1); Config_Defaults(); }
+   Inp_FFT(RF_Acq *RF, Inp_Filter<Float> *Filter=0)
+   { Window=0; this->RF=RF; this->Filter=Filter; Preset(); OutPipe=(-1); Config_Defaults(); }
 
    void Config_Defaults(void)
    { strcpy(OutPipeName, "ogn-rf.fifo"); }
@@ -263,7 +428,13 @@ template <class Float>
       { printf("Inp_FFT.Exec() ... Cannot open %s\n", OutPipeName);
         // here we could try to create the missing pipe
         return -1; } }
-    int Len=OutBuffer.Write(OutPipe);
+    int Len=SerializeWriteSync(OutPipe, OutPipeSync);
+    if(Len>=0) { Len=SerializeWriteName(OutPipe, "FreqCorr"); }
+    if(Len>=0) { Len=SerializeWriteData(OutPipe, (void *)&(RF->FreqCorr),     sizeof(int)   ); }
+    if(Len>=0) { Len=SerializeWriteData(OutPipe, (void *)&(RF->GSM_FreqCorr), sizeof(float) ); }
+    if(Len>=0) { Len=SerializeWriteSync(OutPipe, OutPipeSync); }
+    if(Len>=0) { Len=SerializeWriteName(OutPipe, "Spectra"); }
+    if(Len>=0) { Len=OutBuffer.Serialize(OutPipe); }
     if(Len<0) { printf("Inp_FFT.Exec() ... Error while writing to %s\n", OutPipeName); close(OutPipe); OutPipe=(-1); return -1; }
     return 0; }
 
@@ -290,10 +461,20 @@ template <class Float>
    { // printf("Inp_FFT.Exec() ... Start\n");
      while(!StopReq)
      { double ExecTime=getCPU();
-       SampleBuffer<uint8_t> *InpBuffer = RF->OutQueue.Pop(); // here we wait for a new data batch
-       // printf("Inp_FFT.Exec() ... (%5.3fMHz, %5.3fsec, %dsamples)\n", 1e-6*InpBuffer->Freq, InpBuffer->Time, InpBuffer->Full/2);
-       SlidingFFT(OutBuffer, *InpBuffer, FFT, Window);  // Process input samples, produce FFT spectra
-       RF->OutQueue.Recycle(InpBuffer);
+#ifndef USE_RPI_GPU_FFT
+       if(Filter && Filter->Enable)
+       { SampleBuffer< std::complex<Float> > *InpBuffer = Filter->OutQueue.Pop();
+         // printf("Inp_FFT.Exec() ... (%5.3fMHz, %5.3fsec, %dsamples)\n", 1e-6*InpBuffer->Freq, InpBuffer->Time, InpBuffer->Full/2);
+         SlidingFFT(OutBuffer, *InpBuffer, FFT, Window);  // Process input samples, produce FFT spectra
+         Filter->OutQueue.Recycle(InpBuffer);
+       }
+       else
+#endif
+       { SampleBuffer<uint8_t> *InpBuffer = RF->OutQueue.Pop(); // here we wait for a new data batch
+         // printf("Inp_FFT.Exec() ... (%5.3fMHz, %5.3fsec, %dsamples)\n", 1e-6*InpBuffer->Freq, InpBuffer->Time, InpBuffer->Full/2);
+         SlidingFFT(OutBuffer, *InpBuffer, FFT, Window);  // Process input samples, produce FFT spectra
+         RF->OutQueue.Recycle(InpBuffer);
+       }
        WriteToPipe(); // here we send the FFT spectra in OutBuffer to the demodulator
        ExecTime=getCPU()-ExecTime; // printf("Inp_FFT.Exec() ... %5.3fsec\n", ExecTime);
      }
@@ -613,7 +794,7 @@ Refresh: 5\r\n\
      // time_t Now; time(&Now);
      dprintf(Client->SocketFile, "\
 <title>RTLSDR-OGN RF processor " STR(VERSION) " status</title>\n\
-<b>RTLSDR OGN RF processor " STR(VERSION) " status</b><br /><br />\n\n");
+<b>RTLSDR OGN RF processor " STR(VERSION) "/"__DATE__"</b><br /><br />\n\n");
 
      dprintf(Client->SocketFile, "<table>\n<tr><th>System</th><th></th></tr>\n");
 
@@ -634,8 +815,14 @@ Refresh: 5\r\n\
 #endif
 
      float CPU_Temperature;
-     if(getTemperature_RasberryPi(CPU_Temperature)>=0)
+     if(getCpuTemperature(CPU_Temperature)>=0)
        dprintf(Client->SocketFile, "<tr><td>CPU temperature</td><td align=right><b>%+5.1f &#x2103;</b></td></tr>\n",    CPU_Temperature);
+     float SupplyVoltage;
+     if(getSupplyVoltage(SupplyVoltage)>=0)
+       dprintf(Client->SocketFile, "<tr><td>Supply voltage</td><td align=right><b>%5.3f V</b></td></tr>\n",    SupplyVoltage);
+     float SupplyCurrent;
+     if(getSupplyCurrent(SupplyCurrent)>=0)
+       dprintf(Client->SocketFile, "<tr><td>Supply current</td><td align=right><b>%5.3f A</b></td></tr>\n",    SupplyCurrent);
 
      double NtpTime, EstError, RefFreqCorr;
      if(getNTP(NtpTime, EstError, RefFreqCorr)>=0)
@@ -646,17 +833,57 @@ Refresh: 5\r\n\
        dprintf(Client->SocketFile, "<tr><td>NTP freq. corr.</td><td align=right><b>%+5.2f ppm</b></td></tr>\n", RefFreqCorr);
      }
 
+     if(RF->SDR.isOpen())
+     { dprintf(Client->SocketFile, "<tr><th>RTL-SDR device #%d</th><th></th></tr>\n",                                  RF->SDR.DeviceIndex);
+       dprintf(Client->SocketFile, "<tr><td>Name</td><td align=right><b>%s</b></td></tr>\n",                           RF->SDR.getDeviceName());
+       dprintf(Client->SocketFile, "<tr><td>Tuner type</td><td align=right><b>%s</b></td></tr>\n",                     RF->SDR.getTunerTypeName());
+       char Manuf[256], Product[256], Serial[256];
+       RF->SDR.getUsbStrings(Manuf, Product, Serial);
+       dprintf(Client->SocketFile, "<tr><td>Manufacturer</td><td align=right><b>%s</b></td></tr>\n",                    Manuf);
+       dprintf(Client->SocketFile, "<tr><td>Product</td><td align=right><b>%s</b></td></tr>\n",                         Product);
+       dprintf(Client->SocketFile, "<tr><td>Serial</td><td align=right><b>%s</b></td></tr>\n",                          Serial);
+#ifdef NEW_RTLSDR_LIB
+       for(int Stage=0; Stage<8; Stage++)
+       { char Descr[256]; int Gains=RF->SDR.getTunerStageGains(Stage, 0, Descr); if(Gains<=0) break;
+         dprintf(Client->SocketFile, "<tr><td>Tuner stage #%d</td><td align=right><b>%s [%2d]</b></td></tr>\n",  Stage, Descr, Gains);
+       }
+       dprintf(Client->SocketFile, "<tr><td>Tuner bandwidths</td><td align=right><b>[%d]</b></td></tr>\n",             RF->SDR.getTunerBandwidths());
+       dprintf(Client->SocketFile, "<tr><td>Tuner gains</td><td align=right><b>[%d]</b></td></tr>\n",                  RF->SDR.getTunerGains());
+#endif
+       dprintf(Client->SocketFile, "<tr><td>Center frequency</td><td align=right><b>%7.3f MHz</b></td></tr>\n",        1e-6*RF->SDR.getCenterFreq());
+       dprintf(Client->SocketFile, "<tr><td>Sample rate</td><td align=right><b>%5.3f MHz</b></td></tr>\n",             1e-6*RF->SDR.getSampleRate());
+       dprintf(Client->SocketFile, "<tr><td>Frequency correction</td><td align=right><b>%+5.1f ppm</b></td></tr>\n",   RF->FreqCorr + RF->GSM_FreqCorr);
+       uint32_t RtlFreq, TunerFreq; RF->SDR.getXtalFreq(RtlFreq, TunerFreq);
+       dprintf(Client->SocketFile, "<tr><td>RTL Xtal</td><td align=right><b>%8.6f MHz</b></td></tr>\n",    1e-6*RtlFreq);
+       dprintf(Client->SocketFile, "<tr><td>Tuner Xtal</td><td align=right><b>%8.6f MHz</b></td></tr>\n",  1e-6*TunerFreq);
+/*
+       dprintf(Client->SocketFile, "<tr><td>Gain[%d]</td><td align=right><b>", RF->SDR.Gains);
+       for(int Idx=0; Idx<RF->SDR.Gains; Idx++)
+       { dprintf(Client->SocketFile, "%c%3.1f", Idx?',':' ', 0.1*RF->SDR.Gain[Idx]);
+       }
+       dprintf(Client->SocketFile, " [dB]</b></td></tr>\n");
+*/
+     }
+
      dprintf(Client->SocketFile, "<tr><th>RF</th><th></th></tr>\n");
      dprintf(Client->SocketFile, "<tr><td>RF.Device</td><td align=right><b>%d</b></td></tr>\n",                       RF->DeviceIndex);
      if(RF->DeviceSerial[0])
        dprintf(Client->SocketFile, "<tr><td>RF.DeviceSerial</td><td align=right><b>%s</b></td></tr>\n",               RF->DeviceSerial);
+     dprintf(Client->SocketFile, "<tr><td>RF.SampleRate</td><td align=right><b>%3.1f MHz</b></td></tr>\n",   1e-6*RF->SampleRate);
      dprintf(Client->SocketFile, "<tr><td>RF.FreqCorr</td><td align=right><b>%+3d ppm</b></td></tr>\n",               RF->FreqCorr);
-     dprintf(Client->SocketFile, "<tr><td>Fine calib. FreqCorr</td><td align=right><b>%+5.1f ppm</b></td></tr>\n",      RF->GSM_FreqCorr);
-     dprintf(Client->SocketFile, "<tr><td>RF.OGN.CenterFreq</td><td align=right><b>%5.1f MHz</b></td></tr>\n",   1e-6*RF->CenterFreq);
-     dprintf(Client->SocketFile, "<tr><td>RF.OGN.SampleRate</td><td align=right><b>%3.1f MHz</b></td></tr>\n",   1e-6*RF->SampleRate);
-     dprintf(Client->SocketFile, "<tr><td>RF.OGN.Gain</td><td align=right><b>%4.1f dB</b></td></tr>\n",           0.1*RF->Gain);
-     dprintf(Client->SocketFile, "<tr><td>RF.OGN.StartTime</td><td align=right><b>%5.3f sec</b></td></tr>\n",         RF->StartTime);
-     dprintf(Client->SocketFile, "<tr><td>RF.OGN.SensTime</td><td align=right><b>%5.3f sec</b></td></tr>\n", (double)(RF->SamplesPerRead)/RF->SampleRate);
+     dprintf(Client->SocketFile, "<tr><td>Fine calib. FreqCorr</td><td align=right><b>%+5.1f ppm</b></td></tr>\n",    RF->GSM_FreqCorr);
+     dprintf(Client->SocketFile, "<tr><td>RF.PulseFilter.Threshold</td><td align=right><b>%d</b></td></tr>\n",        RF->PulseFilt.Threshold);
+     dprintf(Client->SocketFile, "<tr><td>RF.PulseFilter duty</td><td align=right><b>%5.1f ppm</b></td></tr>\n",    1e6*RF->PulseFilt.Duty);
+     // dprintf(Client->SocketFile, "<tr><td>RF.ToneFilter.Enable</td><td align=right><b>%d</b></td></tr>\n",                  FFT->Filter->Enable);
+     // dprintf(Client->SocketFile, "<tr><td>RF.ToneFilter.FFTsize</td><td align=right><b>%d</b></td></tr>\n",                 FFT->Filter->FFTsize);
+     // dprintf(Client->SocketFile, "<tr><td>RF.ToneFilter.Threshold</td><td align=right><b>%3.1f</b></td></tr>\n",            FFT->Filter->Threshold);
+     dprintf(Client->SocketFile, "<tr><td>RF.OGN.GainMode</td><td align=right><b>%d</b></td></tr>\n",                 RF->OGN_GainMode);
+     dprintf(Client->SocketFile, "<tr><td>RF.OGN.Gain</td><td align=right><b>%4.1f dB</b></td></tr>\n",           0.1*RF->OGN_Gain);
+     dprintf(Client->SocketFile, "<tr><td>RF.OGN.CenterFreq</td><td align=right><b>%5.1f MHz</b></td></tr>\n",   1e-6*RF->OGN_CenterFreq);
+     dprintf(Client->SocketFile, "<tr><td>RF.OGN.FreqHopChannels</td><td align=right><b>%d</b></td></tr>\n",          RF->OGN_FreqHopChannels);
+     dprintf(Client->SocketFile, "<tr><td>RF.OGN.StartTime</td><td align=right><b>%5.3f sec</b></td></tr>\n",         RF->OGN_StartTime);
+     dprintf(Client->SocketFile, "<tr><td>RF.OGN.SensTime</td><td align=right><b>%5.3f sec</b></td></tr>\n", (double)(RF->OGN_SamplesPerRead)/RF->SampleRate);
+     dprintf(Client->SocketFile, "<tr><td>RF.OGN.SaveRawData</td><td align=right><b>%d sec</b></td></tr>\n", RF->OGN_SaveRawData);
      dprintf(Client->SocketFile, "<tr><td>RF.GSM.CenterFreq</td><td align=right><b>%5.1f MHz</b></td></tr>\n",   1e-6*RF->GSM_CenterFreq);
      dprintf(Client->SocketFile, "<tr><td>RF.GSM.Gain</td><td align=right><b>%4.1f dB</b></td></tr>\n",           0.1*RF->GSM_Gain);
      dprintf(Client->SocketFile, "<tr><td>RF.GSM.SensTime</td><td align=right><b>%5.3f sec</b></td></tr>\n", (double)(RF->GSM_SamplesPerRead)/RF->SampleRate);
@@ -681,13 +908,96 @@ RF spectrograms:\r\n\
 
   RF_Acq             RF;                         // RF input: acquires RF data for OGN and selected GSM frequency
 
-  Inp_FFT<float>     FFT(&RF);                   // FFT for OGN demodulator
+  Inp_Filter<float>  Filter(&RF);                // Coherent interference filter
+
+  Inp_FFT<float>     FFT(&RF, &Filter);          // FFT for OGN demodulator
   GSM_FFT<float>     GSM(&RF);                   // GSM frequency calibration
 
   HTTP_Server<float> HTTP(&RF, &GSM);            // HTTP server to show status and spectrograms
 
 void SigHandler(int signum) // Signal handler, when user pressed Ctrl-C or process stops for whatever reason
 { RF.StopReq=1; }
+
+// ----------------------------------------------------------------------------------------------------
+
+int SetUserValue(const char *Name, float Value)
+{ // printf("%s = %f\n", Name, Value);
+  if(strcmp(Name, "RF.FreqCorr")==0)
+  { RF.FreqCorr=(int)floor(Value+0.5);
+    printf("RF.FreqCorr=%+d ppm\n", RF.FreqCorr);
+    return 1; }
+  if(strcmp(Name, "RF.OGN.Gain")==0)
+  { RF.OGN_Gain=(int)floor(10*Value+0.5);
+    printf("RF.OGN.Gain=%3.1f dB\n", 0.1*RF.OGN_Gain);
+    return 1; }
+  if(strcmp(Name, "RF.OGN.GainMode")==0)
+  { RF.OGN_GainMode=(int)floor(Value+0.5);
+    printf("RF.OGN.GainMode=%d\n", RF.OGN_GainMode);
+    return 1; }
+  if(strcmp(Name, "RF.OGN.SaveRawData")==0)
+  { RF.OGN_SaveRawData=(int)floor(Value+0.5);
+    printf("RF.OGN.SaveRawData=%d\n", RF.OGN_SaveRawData);
+    return 1; }
+  if(strcmp(Name, "RF.GSM.Gain")==0)
+  { RF.GSM_Gain=(int)floor(10*Value+0.5);
+    printf("RF.GSM.Gain=%3.1f dB\n", 0.1*RF.GSM_Gain);
+    return 1; }
+  if(strcmp(Name, "RF.OGN.CenterFreq")==0)
+  { RF.OGN_CenterFreq=(int)floor(1e6*Value+0.5);
+    printf("RF.OGN.CenterFreq=%7.3f MHz\n", 1e-6*RF.OGN_CenterFreq);
+    return 1; }
+  if(strcmp(Name, "RF.GSM.CenterFreq")==0)
+  { RF.GSM_CenterFreq=(int)floor(1e6*Value+0.5);
+    printf("RF.GSM.CenterFreq=%7.3f MHz\n", 1e-6*RF.GSM_CenterFreq);
+    return 1; }
+  if(strcmp(Name, "RF.OGN.FreqHopChannels")==0)
+  { RF.OGN_FreqHopChannels=(int)floor(Value+0.5);
+    printf("RF.OGN_FreqHopChannels=%d\n", RF.OGN_FreqHopChannels);
+    return 1; }
+  if(strcmp(Name, "RF.PulseFilter.Threshold")==0)
+  { RF.PulseFilt.Threshold=(int)floor(Value+0.5);
+    printf("RF.PulseFilter.Threshold=%d\n", RF.PulseFilt.Threshold);
+    return 1; }
+  return 0; }
+
+int PrintUserValues(void)
+{ printf("Settable parameters:\n");
+  printf("RF.FreqCorr=%+d(%+3.1f) ppm\n",      RF.FreqCorr, RF.GSM_FreqCorr);
+  printf("RF.PulseFilter.Threshold=%d",        RF.PulseFilt.Threshold);
+  if(RF.PulseFilt.Threshold) printf(" .Duty=%3.1fppm", 1e6*RF.PulseFilt.Duty);
+  printf("\n");
+  printf("RF.OGN.CenterFreq=%7.3f MHz\n", 1e-6*RF.OGN_CenterFreq);
+  printf("RF.OGN_FreqHopChannels=%d\n",        RF.OGN_FreqHopChannels);
+  printf("RF.OGN.Gain=%3.1f dB\n",         0.1*RF.OGN_Gain);
+  printf("RF.OGN.GainMode=%d\n",               RF.OGN_GainMode);
+  printf("RF.OGN.SaveRawData=%d\n",            RF.OGN_SaveRawData);
+  printf("RF.GSM.CenterFreq=%7.3f MHz\n", 1e-6*RF.GSM_CenterFreq);
+  printf("RF.GSM.Gain=%3.1f dB\n",         0.1*RF.GSM_Gain);
+  return 0; }
+
+int UserCommand(char *Cmd)
+{ if(strchr(Cmd, '\n')==0) return 0;
+  char *Equal = strchr(Cmd, '=');
+  // printf("User command: %s", Cmd);
+  if(Equal)
+  { Equal[0]=0; const char *ValuePtr=Equal+1;
+    char *Name=Cmd;
+    for( ; ; )
+    { char ch=Name[0]; if(ch==0) break;
+      if(ch>' ') break;
+      Name++; }
+    for( ; ; )
+    { Equal--;
+      char ch=Equal[0]; if(ch==0) break;
+      if(ch>' ') break;
+      Equal[0]=0; }
+    float Value;
+    if(sscanf(ValuePtr, "%f", &Value)==1) SetUserValue(Name, Value);
+  }
+  PrintUserValues();
+  return 0; }
+
+// ----------------------------------------------------------------------------------------------------
 
 int main(int argc, char *argv[])
 {
@@ -716,9 +1026,15 @@ int main(int argc, char *argv[])
 
   RF.Config_Defaults();
   RF.Config(&Config);
+
+  Filter.Config_Defaults();
+  Filter.Config(&Config);
+  if(Filter.Enable) Filter.Preset();
+
   FFT.Config_Defaults();
   FFT.Config(&Config);
   FFT.Preset();
+
   GSM.Preset();
 
   HTTP.Config_Defaults();
@@ -727,13 +1043,15 @@ int main(int argc, char *argv[])
 
   config_destroy(&Config);
 
+  if(Filter.Enable) Filter.Start();
   FFT.Start();
   GSM.Start();
   RF.Start();
 
-  for( int t=0; /* t<1000 */ ; t++)
-  { if(RF.StopReq) break;
-    sleep(1); }
+  char Cmd[128];
+  while(!RF.StopReq)
+  { if(fgets(Cmd, 128, stdin)==0) break;
+    UserCommand(Cmd); }
 
   sleep(4);
   RF.Stop();

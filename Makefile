@@ -1,4 +1,4 @@
-VERSION = 0.2.4
+VERSION = 0.2.5
 
 # USE_RPI_GPU_FFT = 1
 

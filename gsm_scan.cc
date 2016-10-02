@@ -240,11 +240,11 @@ int main(int argc, char **argv)
     if(Samples<=0) { printf("SDR.Read(%5.1fMHz) failed\n", 1e-6*Freq); continue; }
     SlidingFFT(Spectra, Input, FFT, Window);                                        // process with sliding FFT
     SpectraPower(Power, Spectra);                                                   // we only want the amplitudes (power)
-
+#ifdef WRITE_SPECTROGRAM
     char FileName[64]; sprintf(FileName, "gsm_scan_%7.3fMHz-%7.3fMHz.jpg", 1e-6*(Power.Freq-FreqStep/2), 1e-6*(Power.Freq+FreqStep/2));
     MonoImage<FloatType> Spectrogram; Spectrogram.setExternal(Power.Data, FFTsize, Power.Samples() );
     Spectrogram.WriteJPG_8bpp(FileName, 80, 0.33, 32.0, 32.0);                      // write spectrogram file
-
+#endif
     // double EstPPM=0;
     // EstimatePPM(EstPPM, Power);
 

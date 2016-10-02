@@ -81,8 +81,34 @@ int getCpuUsage(float &User, float &System) // get CPU usage as ratios
 
 // ===================================================================================================
 
+template <class Type>
+ int getSysValue(Type &Value, const char *Name, const char *Format="%d")
+{ FILE *File=fopen(Name, "rt"); if(File==0) return -1;
+  int Ret=fscanf(File, Format, &Value);
+  fclose(File); return (Ret==1) ? 1:-2; }
+
 template <class Float>
- int getTemperature_RasberryPi(Float &Temperature)
+ int getCpuTemperature(Float &Temperature)
+{ int IntValue;
+  if(getSysValue(IntValue, "/sys/class/thermal/thermal_zone0/temp", "%d")<0)
+  { if(getSysValue(IntValue, "/sys/class/hwmon/hwmon0/device/temp1_input", "%d")<0) return -1; }
+  Temperature=0.001*IntValue; return 0; }
+
+template <class Float>
+ int getSupplyVoltage(Float &Voltage)
+{ int IntValue;
+  if(getSysValue(IntValue, "/sys/class/power_supply/ac/voltage_now", "%d")<0) return -1;
+  Voltage = 1e-6*IntValue; return 0; }
+
+template <class Float>
+ int getSupplyCurrent(Float &Current)
+{ int IntValue;
+  if(getSysValue(IntValue, "/sys/class/power_supply/ac/current_now", "%d")<0) return -1;
+  Current = 1e-6*IntValue; return 0; }
+
+/*
+template <class Float>
+ int getCpuTemperature(Float &Temperature)
 { FILE *File=fopen("/sys/class/thermal/thermal_zone0/temp","rt"); if(File==0) return -1;
   char Line[16];
   if(fgets(Line, 16, File)==0) goto Error;
@@ -90,7 +116,7 @@ template <class Float>
   fclose(File); return 0;
 Error:
   fclose(File); return -1; }
-
+*/
 // ===================================================================================================
 
 #if defined(__MACH__) || defined(__CYGWIN__) // for OSX we cannot read NTP status

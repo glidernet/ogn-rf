@@ -31,7 +31,7 @@
 
 #include <math.h>
 
-#include "alloc.h"
+// #include "alloc.h"
 #include "asciitime.h"
 #include "thread.h"
 
@@ -48,7 +48,15 @@ class RTLSDR
    uint32_t      DeviceIndex;    // RTL dongle index
    rtlsdr_dev_t *Device;         // RTL dongle handle
    int           Gains;          // number of possible gain settings
-   int          *Gain;           // [0.1 dB] list of possible gain settings
+   int           Gain[64];       // [0.1 dB] list of possible gain settings
+
+   int           Bandwidths;
+   int           Bandwidth[16];
+
+   int           Stages;
+   int           StageGains[8];
+   char          StageName[8][32];
+   int           StageGain[8][32];
 
    uint64_t      BytesRead;      // Counts number of bytes read (1 sample = 2 bytes: I/Q)
    int         (*Callback)(uint8_t *Buffer, int Samples, double SampleTime, double SamplePeriod, void *Contex);
@@ -67,7 +75,7 @@ class RTLSDR
 
   public:
    RTLSDR()
-   { DeviceIndex=0; Device=0; Gain=0; Callback=0; CallbackContext=0;
+   { DeviceIndex=0; Device=0; Callback=0; CallbackContext=0; // Gain=0;
      AverPeriod=100.0;
 #ifndef __MACH__ // _POSIX_TIMERS
      RefClock=CLOCK_REALTIME;
@@ -83,15 +91,30 @@ class RTLSDR
    { if(Device)
      { // printf("RTLSDR::Close() => %3.1f MB read, %3.1f samples/sec\n", BytesRead/(1024*1024.0), 1.0/SamplePeriod);
        rtlsdr_cancel_async(Device); rtlsdr_close(Device); }
-     free(Gain); Gain=0; Gains=0;
+     // free(Gain); Gain=0;
+     Gains=0; Stages=0; Bandwidths=0;
      // free(SampleTimePipe); free(SampleIdxPipe); PipeSize=0; SampleTimePipe=0; SampleIdxPipe=0;
      Device=0; Callback=0; }
 
-   int         getNumberOfDevices(void)            { return rtlsdr_get_device_count(); }            // number of connected devices (USB RTL dongles)
-   int         getDeviceUsbStrings(uint32_t DeviceIndex, char *Manufacturer, char *Product, char *Serial)
+   static int  getNumberOfDevices(void)            { return rtlsdr_get_device_count(); }            // number of connected devices (USB RTL dongles)
+
+   static int  getDeviceUsbStrings(uint32_t DeviceIndex, char *Manufacturer, char *Product, char *Serial)
              { return rtlsdr_get_device_usb_strings(DeviceIndex, Manufacturer, Product, Serial); }  // USB description strings
-   const char *getDeviceName(uint32_t DeviceIndex) { return rtlsdr_get_device_name(DeviceIndex); }  // name of given device
-   const char *getDeviceName()                     { return rtlsdr_get_device_name(DeviceIndex); }  // name of this device open by this object
+   int         getUsbStrings(char *Manufacturer, char *Product, char *Serial)
+             { return rtlsdr_get_usb_strings(Device, Manufacturer, Product, Serial); }  // USB description strings
+             // { return rtlsdr_get_device_usb_strings(DeviceIndex, Manufacturer, Product, Serial); }  // USB description strings
+
+   static const char *getDeviceName(uint32_t DeviceIndex) { return rtlsdr_get_device_name(DeviceIndex); }  // name of given device
+          const char *getDeviceName(void)                 { return rtlsdr_get_device_name(DeviceIndex); }  // name of this device open by this object
+
+   int     getTunerType(void) { return rtlsdr_get_tuner_type(Device); }
+   const char *getTunerTypeName(void)
+   { const char *TunerType[7] = { "UNKNOWN", "E4000", "FC0012", "FC0013", "FC2580", "R820T", "R828D" } ;
+     int Type=getTunerType(); if((Type<0)&&(Type>=7)) Type=0; return TunerType[Type]; }
+
+   int     getXtalFreq(uint32_t &RtlFreq, uint32_t &TunerFreq) { return rtlsdr_get_xtal_freq(Device, &RtlFreq, &TunerFreq); }
+   int     setXtalFreq(uint32_t  RtlFreq, uint32_t  TunerFreq) { return rtlsdr_set_xtal_freq(Device,  RtlFreq,  TunerFreq); }
+
    int     ReadEEPROM (uint8_t *Data, uint8_t Offset, uint16_t Size) { return rtlsdr_read_eeprom (Device, Data, Offset, Size); } // read  the EEPROM
    int     WriteEEPROM(uint8_t *Data, uint8_t Offset, uint16_t Size) { return rtlsdr_write_eeprom(Device, Data, Offset, Size); } // write the EEPROM
 
@@ -104,9 +127,21 @@ class RTLSDR
    int     setFreqCorrection(int PPM)           { return rtlsdr_set_freq_correction(Device, PPM); } // [PPM] (Part-Per-Million)
    int     getFreqCorrection(void)              { return rtlsdr_get_freq_correction(Device); } // (fast call)
 
+#ifdef NEW_RTLSDR_LIB
+   int setTunerBandwidth(int Bandwidth) { return rtlsdr_set_tuner_bandwidth(Device, Bandwidth); }    // [Hz] a new (advanced) function
+   // int getTunerBandwidth(void)     { int Bandwidth; return rtlsdr_get_tuner_bandwidth(Device, &Bandwidth); return Bandwidth; }
+   int getTunerBandwidths(int *Bandwidth=0) { return rtlsdr_get_tuner_bandwidths(Device, Bandwidth); }
+#endif
+
+   int getTunerGains(int *Gain=0)           { return rtlsdr_get_tuner_gains(Device, Gain); }
+#ifdef NEW_RTLSDR_LIB
+   int getTunerStageGains(int Stage, int32_t *Gain, char *Description=0) { return rtlsdr_get_tuner_stage_gains(Device, Stage, Gain, Description); }
+   int setTunerStageGain(int Stage, int Gain) { return rtlsdr_set_tuner_stage_gain(Device, Stage, Gain); }
+#endif
    int setTunerGain(int Gain) { return rtlsdr_set_tuner_gain(Device, Gain); }    // [0.1 dB]    set tuner gain when in manual mode
    int getTunerGain(void)     { return rtlsdr_get_tuner_gain(Device); }
 
+   // note: new gain modes are possible with the more advanced drivers: 2=Linearity, 3=Sensitivity
    int setTunerGainMode(int Manual=1) { return rtlsdr_set_tuner_gain_mode(Device, Manual); }  // set radio-tuner gain mode: manual or automatic
    int setTunerGainManual(int Manual=1) { return setTunerGainMode(Manual); }                  // set manual mode
    int setTunerGainAuto(void) { return setTunerGainManual(0); }                               // set automatic mode
@@ -137,22 +172,37 @@ class RTLSDR
      { printf("Cannot set the frequency %d for device #%d\n", Frequency, DeviceIndex); }
      if(setSampleRate(SampleRate)<0)                                                           // set the desired sample rate
      { printf("Cannot set the sample rate %d for device #%d\n", SampleRate, DeviceIndex); }
-     Gains=rtlsdr_get_tuner_gains(Device, 0);                                                  // get list of possible tuner gains
      printf("RTLSDR::Open(%d,%d,%d) => %s, %8.3f MHz, %5.3f Msps\n",
             DeviceIndex, Frequency, SampleRate, getDeviceName(), 1e-6*getCenterFreq(), 1e-6*getSampleRate());
-     if(Gains<=0) Gains=0;
-     else
-     { Malloc(Gain, Gains); rtlsdr_get_tuner_gains(Device, Gain); }
-     // PrintGains();
+
+     Gains=getTunerGains(Gain);                                                  // get list of possible tuner gains
+#ifdef NEW_RTLSDR_LIB
+     for(Stages=0; Stages<8; Stages++)
+     { StageGains[Stages]=getTunerStageGains(Stages, StageGain[Stages], StageName[Stages]);
+       if(StageGains[Stages]<=0) break; }
+#endif
+     PrintGains();
+
+#ifdef NEW_RTLSDR_LIB
+     Bandwidths=getTunerBandwidths(Bandwidth);
+     PrintBandwidths();
+#endif
+
      if(ResetBuffer()<0)                                                                        // reset the buffers (after the manual...)
      { printf("Cannot reset buffer for device #%d\n", DeviceIndex); }
      return 1; }
 
    void PrintGains(void) const
-   { printf("RTLSDR::Gain[%d] =", Gains);
-     for(int Idx=0; Idx<Gains; Idx++)
-       printf(" %+5.1f", 0.1*Gain[Idx]);
-     printf("\n"); }
+   {
+#ifdef NEW_RTLSDR_LIB
+     for(int Stage=0; Stage<Stages; Stage++)
+     { printf("RTLSDR::%s[%d] =", StageName[Stage], StageGains[Stage]);
+       for(int Idx=0; Idx<StageGains[Stage]; Idx++) printf(" %+5.1f", 0.1*StageGain[Stage][Idx]); printf(" [dB]\n"); }
+#endif
+     printf("RTLSDR::Gain[%d] =", Gains); for(int Idx=0; Idx<Gains; Idx++) printf(" %+5.1f", 0.1*Gain[Idx]); printf(" [dB]\n"); }
+
+   void PrintBandwidths(void) const
+   { printf("RTLSDR::Bandwidth[%d] =", Bandwidths); for(int Idx=0; Idx<Bandwidths; Idx++) printf(" %5.3f", 1e-6*Bandwidth[Idx]); printf(" [MHz]\n"); }
 
    double SampleTimeJitter(void) { return sqrt(SampleTime_DMS); }
 
@@ -232,6 +282,7 @@ class RTLSDR
        Buffer.Rate=getSampleRate();
        Buffer.Freq=getCenterFreq();
        Buffer.Time=Time-(double)ReadSamples/Buffer.Rate; }
+     // printf("RTLSDR::Read( , %d) => %d, %7.3fMHz %14.3fsec\n", Samples, ReadSamples, 1e-6*getCenterFreq(), Buffer.Time );
      return ReadSamples;
    }
 

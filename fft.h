@@ -324,10 +324,11 @@ class RPI_GPU_FFT
    int Jobs;
 
   public:
-   RPI_GPU_FFT(const char *GpuDeviceName="gpu_dev")
-   { MailBox=mbox_open(GpuDeviceName);
-     FFT=0; Size=0; Sign=0; Jobs=0; }
-  ~RPI_GPU_FFT() { Free(); mbox_close(MailBox); }
+   RPI_GPU_FFT()
+   { MailBox=mbox_open(); FFT=0; Size=0; Sign=0; Jobs=0; }
+
+  ~RPI_GPU_FFT()
+   { Free(); mbox_close(MailBox); }
 
    void Free(void)
    { if(FFT==0) return;
@@ -338,9 +339,9 @@ class RPI_GPU_FFT
    { if( FFT && (Size==this->Size) && (Sign==this->Sign) && (Jobs==this->Jobs) ) return Size;
      Free(); if(Size<256) return -1;
      int LogN;
-     for(LogN=8; LogN<=17; LogN++)
+     for(LogN=8; LogN<=22; LogN++)
      { if(Size==(1<<LogN)) break; }
-     if(LogN>17) return -1;
+     if(LogN>22) return -1;
      int Err=gpu_fft_prepare(MailBox, LogN, Sign, Jobs, &FFT);
      if(Err<0) { FFT=0; Size=0; return Err; } // -1 => firmware up todate ?, -2 => Size not supported ?, -3 => not enough GPU memory
      this->Size=Size; this->Sign=Sign; this->Jobs=Jobs; return Size; }

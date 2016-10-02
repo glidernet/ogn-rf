@@ -1,5 +1,6 @@
 /*
-Copyright (c) 2013, Andrew Holme.
+BCM2835 "GPU_FFT" release 3.0
+Copyright (c) 2015, Andrew Holme.
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -82,6 +83,15 @@ static float *twiddles_step_32(double two_pi, float *out, double theta) {
         *out++ =  BETA(theta);
     }
     return twiddles_step_16(two_pi, out, 2*theta);
+}
+
+static float *twiddles_step_64(double two_pi, float *out, double theta) {
+    int i;
+    for (i=0; i<32; i++) {
+        *out++ = ALPHA(theta);
+        *out++ =  BETA(theta);
+    }
+    return twiddles_step_32(two_pi, out, 2*theta);
 }
 
 /****************************************************************************/
@@ -191,16 +201,81 @@ static void twiddles_64k(double two_pi, float *out) {
 }
 
 static void twiddles_128k(double two_pi, float *out) {
-    double N=131072;
+    double N=128*1024;
     int q;
 
     out = twiddles_base_32(two_pi, out, 0);
-    out = twiddles_step_16(two_pi, out, two_pi/N * 256);
+    out = twiddles_step_16(two_pi, out, two_pi/N * 16*16);
     out = twiddles_step_16(two_pi, out, two_pi/N * 16);
     out = twiddles_step_16(two_pi, out, two_pi/N * GPU_FFT_QPUS);
 
     for (q=0; q<GPU_FFT_QPUS; q++)
         out = twiddles_base_16(two_pi, out, two_pi/N*q);
+}
+
+static void twiddles_256k(double two_pi, float *out) {
+    double N=256*1024;
+    int q;
+
+    out = twiddles_base_32(two_pi, out, 0);
+    out = twiddles_step_16(two_pi, out, two_pi/N * 32*16);
+    out = twiddles_step_16(two_pi, out, two_pi/N * 32);
+    out = twiddles_step_32(two_pi, out, two_pi/N * GPU_FFT_QPUS);
+
+    for (q=0; q<GPU_FFT_QPUS; q++)
+        out = twiddles_base_32(two_pi, out, two_pi/N*q);
+}
+
+static void twiddles_512k(double two_pi, float *out) {
+    double N=512*1024;
+    int q;
+
+    out = twiddles_base_32(two_pi, out, 0);
+    out = twiddles_step_16(two_pi, out, two_pi/N * 32*32);
+    out = twiddles_step_32(two_pi, out, two_pi/N * 32);
+    out = twiddles_step_32(two_pi, out, two_pi/N * GPU_FFT_QPUS);
+
+    for (q=0; q<GPU_FFT_QPUS; q++)
+        out = twiddles_base_32(two_pi, out, two_pi/N*q);
+}
+
+static void twiddles_1024k(double two_pi, float *out) {
+    double N=1024*1024;
+    int q;
+
+    out = twiddles_base_32(two_pi, out, 0);
+    out = twiddles_step_32(two_pi, out, two_pi/N * 32*32);
+    out = twiddles_step_32(two_pi, out, two_pi/N * 32);
+    out = twiddles_step_32(two_pi, out, two_pi/N * GPU_FFT_QPUS);
+
+    for (q=0; q<GPU_FFT_QPUS; q++)
+        out = twiddles_base_32(two_pi, out, two_pi/N*q);
+}
+
+static void twiddles_2048k(double two_pi, float *out) {
+    double N=2048*1024;
+    int q;
+
+    out = twiddles_base_64(two_pi, out);
+    out = twiddles_step_32(two_pi, out, two_pi/N * 32*32);
+    out = twiddles_step_32(two_pi, out, two_pi/N * 32);
+    out = twiddles_step_32(two_pi, out, two_pi/N * GPU_FFT_QPUS);
+
+    for (q=0; q<GPU_FFT_QPUS; q++)
+        out = twiddles_base_32(two_pi, out, two_pi/N*q);
+}
+
+static void twiddles_4096k(double two_pi, float *out) {
+    double N=4096*1024;
+    int q;
+
+    out = twiddles_base_64(two_pi, out);
+    out = twiddles_step_64(two_pi, out, two_pi/N * 32*32);
+    out = twiddles_step_32(two_pi, out, two_pi/N * 32);
+    out = twiddles_step_32(two_pi, out, two_pi/N * GPU_FFT_QPUS);
+
+    for (q=0; q<GPU_FFT_QPUS; q++)
+        out = twiddles_base_32(two_pi, out, two_pi/N*q);
 }
 
 /****************************************************************************/
@@ -219,11 +294,16 @@ shaders[] = {
     {3, 5, 1, twiddles_16k},
     {3, 6, 2, twiddles_32k},
     {3, 8, 2, twiddles_64k},
-    {4, 5, 1, twiddles_128k}
+    {4, 5, 1, twiddles_128k},
+    {4, 6, 2, twiddles_256k},
+    {4, 7, 2, twiddles_512k},
+    {4, 8, 2, twiddles_1024k},
+    {4,10, 2, twiddles_2048k},
+    {4,12, 2, twiddles_4096k}
 };
 
 int gpu_fft_twiddle_size(int log2_N, int *shared, int *unique, int *passes) {
-    if (log2_N<8 || log2_N>17) return -1;
+    if (log2_N<8 || log2_N>22) return -1;
     *shared = shaders[log2_N-8].shared;
     *unique = shaders[log2_N-8].unique;
     *passes = shaders[log2_N-8].passes;

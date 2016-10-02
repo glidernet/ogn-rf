@@ -28,6 +28,8 @@
 #include "fft.h"
 #include "r2fft.h"
 
+#include "serialize.h"
+
 // ==================================================================================================
 
 template <class Type>
@@ -58,57 +60,6 @@ template <class Type>
    int Allocate(int NewLen, int Samples)
    { Allocate(NewLen*Samples); Len=NewLen; return Size; }
 
-   static const uint32_t FileSync = 0x254F7D00 + sizeof(Type);
-
-   int Write(int File) // write SampleBuffer to a file/socket
-   { int Total=0, Bytes; uint32_t Sync=FileSync;
-     Bytes=write(File, &Sync, sizeof(uint32_t)); if(Bytes<0) return -1;
-     Total+=Bytes;
-     Bytes=write(File, &Size, sizeof(int32_t)); if(Bytes<0) return -1;
-     Total+=Bytes;
-     Bytes=write(File, &Full, sizeof(int32_t)); if(Bytes<0) return -1;
-     Total+=Bytes;
-     Bytes=write(File, &Len , sizeof(int32_t)); if(Bytes<0) return -1;
-     Total+=Bytes;
-     Bytes=write(File, &Rate, sizeof(double)); if(Bytes<0) return -1;
-     Total+=Bytes;
-     Bytes=write(File, &Time, sizeof(double)); if(Bytes<0) return -1;
-     Total+=Bytes;
-     Bytes=write(File, &Freq, sizeof(double)); if(Bytes<0) return -1;
-     Total+=Bytes;
-     Bytes=write(File,  Data, Full*sizeof(Type)); if(Bytes<0) return -1;
-     Total+=Bytes;
-     return Total; }
-
-   int ReadSync(int File)
-   { int Total=0, Bytes; uint32_t Sync;
-     while(1)
-     { Bytes=read(File, &Sync, sizeof(uint32_t)); if(Bytes<0) return -1;
-       Total+=Bytes;
-       if(Sync==FileSync) break; }
-     return Total; }
-
-   int Read(int File)  // read SampleBuffer from a file/socket
-   { int Total=0, Bytes;
-     int32_t NewSize=0;
-     Bytes=read(File, &NewSize, sizeof(int32_t)); if(Bytes<0) return -1;
-     if(NewSize<0) return -1;
-     Total+=Bytes;
-     if(Allocate(NewSize)==0) return -2;
-     Bytes=read(File, &Full, sizeof(int32_t)); if(Bytes<0) return -1;
-     Total+=Bytes;
-     Bytes=read(File, &Len , sizeof(int32_t)); if(Bytes<0) return -1;
-     Total+=Bytes;
-     Bytes=read(File, &Rate, sizeof(double)); if(Bytes<0) return -1;
-     Total+=Bytes;
-     Bytes=read(File, &Time, sizeof(double)); if(Bytes<0) return -1;
-     Total+=Bytes;
-     Bytes=read(File, &Freq, sizeof(double)); if(Bytes<0) return -1;
-     Total+=Bytes;
-     Bytes=read(File,  Data, Full*sizeof(Type)); if(Bytes<0) return -1;
-     Total+=Bytes;
-     return Total; }
-
    int Samples(void) const { return Full/Len; }                // number of samples
    Type *SamplePtr(int Idx) const { return Data+Idx*Len; }     // pointer to an indexed sample
    Type &operator [](int Idx) { return Data[Idx]; }            // reference to an indexed value
@@ -127,6 +78,13 @@ template <class Type>
    { double Sum=0;
      for(int Idx=0; Idx<Full; Idx++) Sum+=Data[Idx];
      return Sum/Full; }
+
+   void Crop(int Head, int Tail)
+   { int NewFull=Full-(Head+Tail)*Len;
+     if(Head)
+     { memmove(Data, Data+Head*Len, NewFull*sizeof(Type));
+       Time+=Head/Rate; }
+     Full=NewFull; }
 
    int Copy(SampleBuffer<Type> &Buffer)                        // allocate and copy from another SampleBuffer
    { Allocate(Buffer.Size); memcpy(Data, Buffer.Data, Size*sizeof(Type));
@@ -157,11 +115,65 @@ template <class Type>
     void operator *= (ScaleType Scale)
    { for(int Idx=0; Idx<Full; Idx++) Data[Idx]*=Scale; }
 
-   int WritePlotFile(const char *FileName)
-   { FILE *File=fopen(FileName, "wt"); if(File==0) return 0;
-     for(int Idx=0; Idx<Size; Idx++)
-       fprintf(File, "%4d: %+10.6f\n", Idx, Data[Idx] );
+   int WritePlotFile(const char *FileName, int StartIdx=0, int Values=0) const
+   { if(Values==0) Values=Size-StartIdx;
+     FILE *File=fopen(FileName, "wt"); if(File==0) return 0;
+     fprintf(File, "# %d x %d, Time=%17.6fsec, Freq=%10.6fMHz, Rate=%8.6fMHz\n", Samples(), Len, Time, 1e-6*Freq, 1e-6*Rate);
+     for(int Idx=StartIdx; Idx<Size; Idx++)
+     { if((Idx-StartIdx)>=Values) break;
+       fprintf(File, "%4d: %+12.6f\n", Idx, Data[Idx] ); }
      fclose(File); return Size; }
+
+   int WriteComplexPlotFile(const char *FileName, int StartIdx=0, int Values=0) const
+   { if(Values==0) Values=Size-StartIdx;
+     FILE *File=fopen(FileName, "wt"); if(File==0) return 0;
+     fprintf(File, "# %d x %d, Time=%17.6fsec, Freq=%10.6fMHz, Rate=%8.6fMHz\n", Samples(), Len, Time, 1e-6*Freq, 1e-6*Rate);
+     fprintf(File, "# Index      Real         Imag         Magn  Phase[deg]\n");
+     for(int Idx=StartIdx; Idx<Size; Idx++)
+     { if((Idx-StartIdx)>=Values) break;
+       fprintf(File, "%4d: %+12.6f %+12.6f %12.6f %+9.3f\n", Idx, real(Data[Idx]), imag(Data[Idx]), sqrt(norm(Data[Idx])), (180/M_PI)*arg(Data[Idx]) ); }
+     fclose(File); return Size; }
+
+  template <class StreamType>
+   int Serialize(StreamType File) // write SampleBuffer to a file/socket
+   { int Total=0, Bytes;
+     Bytes=SerializeWriteData(File, &Size, sizeof(int32_t)); if(Bytes<0) return -1;
+     Total+=Bytes;
+     Bytes=SerializeWriteData(File, &Full, sizeof(int32_t)); if(Bytes<0) return -1;
+     Total+=Bytes;
+     Bytes=SerializeWriteData(File, &Len , sizeof(int32_t)); if(Bytes<0) return -1;
+     Total+=Bytes;
+     Bytes=SerializeWriteData(File, &Rate, sizeof(double)); if(Bytes<0) return -1;
+     Total+=Bytes;
+     Bytes=SerializeWriteData(File, &Time, sizeof(double)); if(Bytes<0) return -1;
+     Total+=Bytes;
+     Bytes=SerializeWriteData(File, &Freq, sizeof(double)); if(Bytes<0) return -1;
+     Total+=Bytes;
+     Bytes=SerializeWriteData(File,  Data, Full*sizeof(Type)); if(Bytes<0) return -1;
+     Total+=Bytes;
+     return Total; }
+
+  template <class StreamType>
+   int Deserialize(StreamType File)  // read SampleBuffer from a file/socket
+   { int Total=0, Bytes;
+     int32_t NewSize=0;
+     Bytes=SerializeReadData(File, &NewSize, sizeof(int32_t)); if(Bytes<0) return -1;
+     if(NewSize<0) return -1;
+     Total+=Bytes;
+     if(Allocate(NewSize)==0) return -2;
+     Bytes=SerializeReadData(File, &Full, sizeof(int32_t)); if(Bytes<0) return -1;
+     Total+=Bytes;
+     Bytes=SerializeReadData(File, &Len , sizeof(int32_t)); if(Bytes<0) return -1;
+     Total+=Bytes;
+     Bytes=SerializeReadData(File, &Rate, sizeof(double)); if(Bytes<0) return -1;
+     Total+=Bytes;
+     Bytes=SerializeReadData(File, &Time, sizeof(double)); if(Bytes<0) return -1;
+     Total+=Bytes;
+     Bytes=SerializeReadData(File, &Freq, sizeof(double)); if(Bytes<0) return -1;
+     Total+=Bytes;
+     Bytes=SerializeReadData(File,  Data, Full*sizeof(Type)); if(Bytes<0) return -1;
+     Total+=Bytes;
+     return Total; }
 
    int Write(FILE *File) // write all samples onto a binary file (with header)
    { if(fwrite(&Size, sizeof(Size), 1, File)!=1) return -1;

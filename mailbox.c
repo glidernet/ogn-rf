@@ -67,14 +67,14 @@ void *mapmem(unsigned base, unsigned size)
    return (char *)mem + offset;
 }
 
-void *unmapmem(void *addr, unsigned size)
+void unmapmem(void *addr, unsigned size)
 {
    int s = munmap(addr, size);
    if (s != 0) {
       printf("munmap error %d\n", s);
       exit (-1);
    }
-  return 0; }
+}
 
 /*
  * use ioctl to send mbox property message
@@ -240,14 +240,14 @@ unsigned execute_qpu(int file_desc, unsigned num_qpus, unsigned control, unsigne
    return p[5];
 }
 
-int mbox_open(const char *DeviceName) {
+int mbox_open() {
    int file_desc;
 
    // open a char device file used for communicating with kernel mbox driver
-   file_desc = open(DeviceName, 0);
+   file_desc = open(DEVICE_FILE_NAME, 0);
    if (file_desc < 0) {
-      printf("Can't open device file: %s - another program is using it ?\n", DeviceName);
-      printf("If not exists, try creating a device file with: sudo mknod %s c %d 0\n", DeviceName, MAJOR_NUM);
+      printf("Can't open device file: %s\n", DEVICE_FILE_NAME);
+      printf("Try creating a device file with: sudo mknod %s c %d 0\n", DEVICE_FILE_NAME, MAJOR_NUM);
       exit(-1);
    }
    return file_desc;
