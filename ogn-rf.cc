@@ -86,6 +86,7 @@ class RF_Acq                                    // acquire wideband (1MHz) RF da
    int  DeviceIndex;                            // rtl-sdr device index
    char DeviceSerial[64];                       // serial number of the rtl-sdr device to be selected
    int  OffsetTuning;                           // [bool] this option might be good for E4000 tuner
+   int  BiasTee;                                // [bool] T-bias for external LNA power
    int  FreqCorr;                               // [ppm] frequency correction applied to the Rx chip
    RTLSDR SDR;                                  // SDR receiver (DVB-T stick)
    ReuseObjectQueue< SampleBuffer<uint8_t> > OutQueue; // OGN sample batches are sent there
@@ -124,7 +125,8 @@ class RF_Acq                                    // acquire wideband (1MHz) RF da
     OGN_FreqHopChannels=0;
     OGN_SaveRawData=0;
     PulseFilt.Threshold=0;
-    DeviceIndex=0; DeviceSerial[0]=0; OffsetTuning=0; FreqCorr=0;
+    DeviceIndex=0; DeviceSerial[0]=0;
+    OffsetTuning=0; FreqCorr=0; BiasTee=0;
     GSM_CenterFreq=GSM_LowEdge+GSM_ScanStep/2; GSM_Scan=1; GSM_SamplesPerRead=(250*SampleRate)/1000; GSM_Gain=200; }
 
   int config_lookup_float_or_int(config_t *Config, const char *Path, double *Value)
@@ -140,6 +142,7 @@ class RF_Acq                                    // acquire wideband (1MHz) RF da
     config_lookup_string(Config,"RF.DeviceSerial",   &Serial);
     if(Serial) { strncpy(DeviceSerial, Serial, 64); DeviceSerial[63]=0; }
     config_lookup_int(Config,   "RF.OfsTune",        &OffsetTuning);
+    config_lookup_int(Config,   "RF.BiasTee",        &BiasTee);
     config_lookup_int(Config,   "RF.OGN.GainMode",   &OGN_GainMode);
 
     config_lookup_int(Config,   "RF.OGN.SaveRawData",   &OGN_SaveRawData);
@@ -265,6 +268,7 @@ class RF_Acq                                    // acquire wideband (1MHz) RF da
          { printf("RF_Acq.Exec() ... SDR.Open(%d, , ) fails, retry after 1 sec\n", Index); usleep(1000000); }
          else
          { SDR.setOffsetTuning(OffsetTuning);
+           SDR.setBiasTee(BiasTee);
            SDR.setTunerGainMode(OGN_GainMode);
            SDR.setTunerGain(OGN_Gain); }
            SDR.setFreqCorrection(FreqCorr);
@@ -869,8 +873,11 @@ Refresh: 5\r\n\
      dprintf(Client->SocketFile, "<tr><td>RF.Device</td><td align=right><b>%d</b></td></tr>\n",                       RF->DeviceIndex);
      if(RF->DeviceSerial[0])
        dprintf(Client->SocketFile, "<tr><td>RF.DeviceSerial</td><td align=right><b>%s</b></td></tr>\n",               RF->DeviceSerial);
-     dprintf(Client->SocketFile, "<tr><td>RF.SampleRate</td><td align=right><b>%3.1f MHz</b></td></tr>\n",   1e-6*RF->SampleRate);
+     dprintf(Client->SocketFile, "<tr><td>RF.SampleRate</td><td align=right><b>%3.1f MHz</b></td></tr>\n",       1e-6*RF->SampleRate);
+     // dprintf(Client->SocketFile, "<tr><td>RF.PipeName</td><td align=right><b>%s</b></td></tr>\n",                  ??->OutPipeName );
      dprintf(Client->SocketFile, "<tr><td>RF.FreqCorr</td><td align=right><b>%+3d ppm</b></td></tr>\n",               RF->FreqCorr);
+     dprintf(Client->SocketFile, "<tr><td>RF.BiasTee</td><td align=right><b>%d</b></td></tr>\n",                      RF->BiasTee);
+     dprintf(Client->SocketFile, "<tr><td>RF.OffsetTuning</td><td align=right><b>%d</b></td></tr>\n",                 RF->OffsetTuning);
      dprintf(Client->SocketFile, "<tr><td>Fine calib. FreqCorr</td><td align=right><b>%+5.1f ppm</b></td></tr>\n",    RF->GSM_FreqCorr);
      dprintf(Client->SocketFile, "<tr><td>RF.PulseFilter.Threshold</td><td align=right><b>%d</b></td></tr>\n",        RF->PulseFilt.Threshold);
      dprintf(Client->SocketFile, "<tr><td>RF.PulseFilter duty</td><td align=right><b>%5.1f ppm</b></td></tr>\n",    1e6*RF->PulseFilt.Duty);

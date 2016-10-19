@@ -149,6 +149,8 @@ class RTLSDR
    int setTestMode(int Test=1) { return rtlsdr_set_testmode(Device, Test); }  // Enable/Disable test mode - a counter is send, not real data
    int ResetBuffer(void) { return rtlsdr_reset_buffer(Device); }              // obligatory, the docs say, before you start reading
 
+   int setBiasTee(int On=1) { return rtlsdr_set_bias_tee(Device, On); }       // turn on or off the T-bias circuit to power extenal LNA: never use with DC-shorted antennas !
+
    double getTime(void) const                                                 // read the system time at this very moment
 #ifndef __MACH__ // _POSIX_TIMERS
    { struct timespec now; clock_gettime(RefClock, &now); return now.tv_sec + 1e-9*now.tv_nsec; }

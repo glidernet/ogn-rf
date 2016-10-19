@@ -28,9 +28,12 @@
 #include <netdb.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 // #include <netinet/ip_icmp.h>
 #include <sys/types.h>
+#include <sys/stat.h>
 #include <sys/socket.h>
+#include <sys/sendfile.h>
 #include <fcntl.h>
 #include <sys/ioctl.h>
 
@@ -309,6 +312,9 @@ class Socket                   // IP socket
      { struct linger Linger; Linger.l_onoff=ON; Linger.l_linger=Seconds;
        return setsockopt(SocketFile, SOL_SOCKET, SO_LINGER, &Linger, sizeof(Linger)); }
 
+   int setNoDelay(int ON=1)
+   { return setsockopt(SocketFile, IPPROTO_TCP, TCP_NODELAY, &ON, sizeof(ON)); }
+
    int setSendBufferSize(int Bytes)
      { return setsockopt(SocketFile, SOL_SOCKET, SO_SNDBUF, &Bytes, sizeof(Bytes)); }
 
@@ -408,7 +414,7 @@ class Socket                   // IP socket
 
        if(bind(SocketFile, (struct sockaddr *) &ListenAddress, sizeof(ListenAddress))<0)
        { Close(); return -1; }
-     
+
        if(listen(SocketFile, MaxConnections)<0)
        { Close(); return -1; }
 
@@ -438,6 +444,13 @@ class Socket                   // IP socket
        int SentBytes=Send(Buffer.Data+Buffer.Done, Bytes, Flags);
        if(SentBytes>0) Buffer.Done+=SentBytes;
        return SentBytes; }
+
+   int SendFile(const char *FileName)
+   { int File=open(FileName, O_RDONLY); if(File<0) return File;
+     struct stat Stat; fstat(File, &Stat); int Size=Stat.st_size;
+     int Ret=sendfile(SocketFile, File, 0, Size);
+     close(File);
+     return Ret; }
 
    // send data (on a non-connected socket)
    int SendTo(const void *Message, int Bytes, SocketAddress Address, int Flags=MSG_NOSIGNAL)
