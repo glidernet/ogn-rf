@@ -1,4 +1,4 @@
-VERSION = 0.2.6
+VERSION = $(shell cat VERSION.txt)
 
 # USE_RPI_GPU_FFT = 1
 
