@@ -1,0 +1,23 @@
+dist: trusty
+sudo: required
+
+language: cpp
+
+addons:
+    apt:
+        packages:
+            - make
+            - libconfig-dev
+            - libfftw3-dev
+            - libjpeg-dev
+
+            # Build requirements of librtlsdr
+            - libusb-1.0-0-dev
+
+install:
+- wget https://github.com/librtlsdr/librtlsdr/archive/v0.7.0.tar.gz
+- tar xzf v0.7.0.tar.gz
+- pushd librtlsdr-0.7.0 && cmake . && make && sudo make install && popd
+
+script:
+    make
