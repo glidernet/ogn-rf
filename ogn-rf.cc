@@ -1055,10 +1055,17 @@ int main(int argc, char *argv[])
   GSM.Start();
   RF.Start();
 
-  char Cmd[128];
-  while(!RF.StopReq)
-  { if(fgets(Cmd, 128, stdin)==0) break;
-    UserCommand(Cmd); }
+  if (isatty(fileno(stdin))) {
+    char Cmd[128];
+    while(!RF.StopReq) {
+      if(fgets(Cmd, 128, stdin)==0) break;
+      UserCommand(Cmd);
+    }
+  } else {
+    while(!RF.StopReq) {
+      sleep(1);
+    }
+  }
 
   sleep(4);
   RF.Stop();
