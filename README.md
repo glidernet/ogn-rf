@@ -1,5 +1,6 @@
 ogn-rf
 ========
+[![Build Status](https://travis-ci.org/glidernet/ogn-rf.svg?branch=master)](https://travis-ci.org/glidernet/ogn-rf)
 
 This software is public part of software listens to OGN radio messages and sends it to Open Glider Network (OGN).
 More information can be found on: http://glidernet.org
