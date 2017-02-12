@@ -1,7 +1,7 @@
 VERSION = $(shell cat VERSION.txt)
 
 FLAGS = -Wall -O3 -ffast-math -DVERSION=$(VERSION)
-LDLIBS  =  -lpthread -lm -ljpeg -lconfig -lrt -lfftw3 -lfftw3f -lrtlsdr
+LDLIBS  =  -lpthread -lm -ljpeg -lconfig -lrt -lfftw3f -lrtlsdr
 
 #####
 
