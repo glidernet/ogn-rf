@@ -36,4 +36,4 @@ r2fft_test:	src/r2fft_test.cc src/r2fft.h src/fft.h
 clean:
 	$(RM) gsm_scan ogn-rf r2fft_test
 
-.PHONY: clean
+.PHONY: all clean
