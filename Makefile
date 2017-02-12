@@ -29,7 +29,7 @@ ogn-rf: src/ogn-rf.cc src/thread.h src/rtlsdr.h src/fft.h src/buffer.h src/image
 gsm_scan: src/gsm_scan.cc src/fft.h src/buffer.h src/image.h
 	g++ $(FLAGS) $(GPU_FLAGS) -o $@ $< $(GPU_SRC) $(LDLIBS)
 
-.PHONY: clean
-
 clean:
 	$(RM) gsm_scan ogn-rf
+
+.PHONY: all clean
