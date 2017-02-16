@@ -1,0 +1,11 @@
+[Unit]
+Description=Decode ogn/flarm data given by a fifo and forward it to glidernet.org
+After=network.target time-sync.target
+
+[Service]
+User=ogn
+ExecStart=/usr/bin/ogn-decode /etc/rtlsdr-ogn.conf
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
