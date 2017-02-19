@@ -3,6 +3,12 @@ Description=Decode ogn/flarm data given by a fifo and forward it to glidernet.or
 After=network.target time-sync.target
 
 [Service]
+# Using a tty as StandardInput is needed as a workaround,
+# since ogn-decode requires an interactive tty (as in: 'doesn't return EOF'),
+# see also: https://github.com/glidernet/ogn-rf/issues/11
+StandardInput=tty-fail
+StandardOutput=journal
+TTYPath=/dev/tty3
 User=ogn
 ExecStart=/usr/bin/ogn-decode /etc/rtlsdr-ogn.conf
 Restart=on-failure
