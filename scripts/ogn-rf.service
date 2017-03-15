@@ -3,7 +3,7 @@ Description=Receive ogn/flarm data and write the raw data to a fifo
 After=network.target time-sync.target
 
 [Service]
-User=ogn
+User=root
 ExecStart=/usr/bin/ogn-rf /etc/rtlsdr-ogn.conf
 Restart=on-failure
 
