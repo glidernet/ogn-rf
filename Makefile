@@ -16,7 +16,8 @@ endif
 
 ifdef USE_RPI_GPU_FFT
 GPU_FLAGS = -DUSE_RPI_GPU_FFT
-GPU_SRC   = mailbox.c gpu_fft.c gpu_fft_twiddles.c gpu_fft_shaders.c
+GPU_SRC   = mailbox.c gpu_fft_base.c gpu_fft.c gpu_fft_twiddles.c gpu_fft_shaders.c
+LIBS += -ldl
 endif
 
 all:    gsm_scan ogn-rf r2fft_test
