@@ -42,11 +42,12 @@ template <class Type>
    double Rate;   // [Hz]  sampling rate
    double Time;   // [sec] time when samples were acquired
    double Freq;   // [Hz]  RF frequency where samples were acquired
+   uint32_t Date; // [sec] integer part of Time to keep precision
 
    Type  *Data;  // (allocated) storage
 
   public:
-   SampleBuffer() { Size=0; Data=0; Full=0; Len=1; }
+   SampleBuffer() { Size=0; Data=0; Full=0; Len=1; Time=0; Date=0; }
   ~SampleBuffer() { Free(); }
 
    void Free(void) { if(Data) delete [] Data; Data=0; Size=0; Full=0; }
@@ -69,7 +70,7 @@ template <class Type>
    template <class OtherType>                                  // allocate after another SampleBuffer
     int Allocate(SampleBuffer<OtherType> &Buffer)
    { Allocate(Buffer.Size);
-     Len=Buffer.Len; Rate=Buffer.Rate; Time=Buffer.Time; Freq=Buffer.Freq; return Size; }
+     Len=Buffer.Len; Rate=Buffer.Rate; Time=Buffer.Time; Date=Buffer.Date; Freq=Buffer.Freq; return Size; }
 
    void Set(Type Value=0)
    { Type *DataPtr=Data; for(int Idx=0; Idx<Size; Idx++) (*DataPtr++)=Value; }
@@ -88,11 +89,11 @@ template <class Type>
 
    int Copy(SampleBuffer<Type> &Buffer)                        // allocate and copy from another SampleBuffer
    { Allocate(Buffer.Size); memcpy(Data, Buffer.Data, Size*sizeof(Type));
-     Full=Buffer.Full; Len=Buffer.Len; Rate=Buffer.Rate; Time=Buffer.Time; Freq=Buffer.Freq; return Size; }
+     Full=Buffer.Full; Len=Buffer.Len; Rate=Buffer.Rate; Time=Buffer.Time; Date=Buffer.Date; Freq=Buffer.Freq; return Size; }
 
    int CopySample(SampleBuffer<Type> &Buffer, int Idx)         // copy just one sample (but can be more than one value)
    { Allocate(Buffer->Len);
-     Full=Buffer.Len; Len=Buffer.Len; Rate=Buffer.Rate; Time=Buffer.Time+Idx/Rate; Freq=Buffer.Freq;
+     Full=Buffer.Len; Len=Buffer.Len; Rate=Buffer.Rate; Time=Buffer.Time+Idx/Rate; Date=Buffer.Date; Freq=Buffer.Freq;
      memcpy(Data, Buffer.Data + Idx*Len, Len*sizeof(Type));
      return Size; }
 
@@ -103,7 +104,7 @@ template <class Type>
    template <class OtherType>
     int CopySampleSum(SampleBuffer<OtherType> &Buffer, int Idx1, int Idx2) // copy the sum of several samples
    { Allocate(Buffer.Len);
-     Full=Buffer.Len; Len=Buffer.Len; Rate=Buffer.Rate; Time=Buffer.Time+0.5*(Idx1+Idx2)/Rate; Freq=Buffer.Freq;
+     Full=Buffer.Len; Len=Buffer.Len; Rate=Buffer.Rate; Time=Buffer.Time+0.5*(Idx1+Idx2)/Rate; Date=Buffer.Date; Freq=Buffer.Freq;
      for(int Idx=0; Idx<Len; Idx++) { Data[Idx]=0; }
      for(int sIdx=Idx1; sIdx<=Idx2; sIdx++)
      { Type *sPtr = Buffer.Data + sIdx*Len;
@@ -137,19 +138,20 @@ template <class Type>
   template <class StreamType>
    int Serialize(StreamType File) // write SampleBuffer to a file/socket
    { int Total=0, Bytes;
-     Bytes=SerializeWriteData(File, &Size, sizeof(int32_t)); if(Bytes<0) return -1;
+     Bytes=Serialize_WriteData(File, &Size, sizeof(int32_t)); if(Bytes<0) return -1;
      Total+=Bytes;
-     Bytes=SerializeWriteData(File, &Full, sizeof(int32_t)); if(Bytes<0) return -1;
+     Bytes=Serialize_WriteData(File, &Full, sizeof(int32_t)); if(Bytes<0) return -1;
      Total+=Bytes;
-     Bytes=SerializeWriteData(File, &Len , sizeof(int32_t)); if(Bytes<0) return -1;
+     Bytes=Serialize_WriteData(File, &Len , sizeof(int32_t)); if(Bytes<0) return -1;
      Total+=Bytes;
-     Bytes=SerializeWriteData(File, &Rate, sizeof(double)); if(Bytes<0) return -1;
+     Bytes=Serialize_WriteData(File, &Rate, sizeof(double)); if(Bytes<0) return -1;
      Total+=Bytes;
-     Bytes=SerializeWriteData(File, &Time, sizeof(double)); if(Bytes<0) return -1;
+     double FullTime=Time+Date;
+     Bytes=Serialize_WriteData(File, &FullTime, sizeof(double)); if(Bytes<0) return -1;
      Total+=Bytes;
-     Bytes=SerializeWriteData(File, &Freq, sizeof(double)); if(Bytes<0) return -1;
+     Bytes=Serialize_WriteData(File, &Freq, sizeof(double)); if(Bytes<0) return -1;
      Total+=Bytes;
-     Bytes=SerializeWriteData(File,  Data, Full*sizeof(Type)); if(Bytes<0) return -1;
+     Bytes=Serialize_WriteData(File,  Data, Full*sizeof(Type)); if(Bytes<0) return -1;
      Total+=Bytes;
      return Total; }
 
@@ -157,21 +159,22 @@ template <class Type>
    int Deserialize(StreamType File)  // read SampleBuffer from a file/socket
    { int Total=0, Bytes;
      int32_t NewSize=0;
-     Bytes=SerializeReadData(File, &NewSize, sizeof(int32_t)); if(Bytes<0) return -1;
+     Bytes=Serialize_ReadData(File, &NewSize, sizeof(int32_t)); if(Bytes<0) return -1;
      if(NewSize<0) return -1;
      Total+=Bytes;
      if(Allocate(NewSize)==0) return -2;
-     Bytes=SerializeReadData(File, &Full, sizeof(int32_t)); if(Bytes<0) return -1;
+     Bytes=Serialize_ReadData(File, &Full, sizeof(int32_t)); if(Bytes<0) return -1;
      Total+=Bytes;
-     Bytes=SerializeReadData(File, &Len , sizeof(int32_t)); if(Bytes<0) return -1;
+     Bytes=Serialize_ReadData(File, &Len , sizeof(int32_t)); if(Bytes<0) return -1;
      Total+=Bytes;
-     Bytes=SerializeReadData(File, &Rate, sizeof(double)); if(Bytes<0) return -1;
+     Bytes=Serialize_ReadData(File, &Rate, sizeof(double)); if(Bytes<0) return -1;
      Total+=Bytes;
-     Bytes=SerializeReadData(File, &Time, sizeof(double)); if(Bytes<0) return -1;
+     Bytes=Serialize_ReadData(File, &Time, sizeof(double)); if(Bytes<0) return -1;
      Total+=Bytes;
-     Bytes=SerializeReadData(File, &Freq, sizeof(double)); if(Bytes<0) return -1;
+     Date=(uint32_t)floor(Time); Time-=Date;
+     Bytes=Serialize_ReadData(File, &Freq, sizeof(double)); if(Bytes<0) return -1;
      Total+=Bytes;
-     Bytes=SerializeReadData(File,  Data, Full*sizeof(Type)); if(Bytes<0) return -1;
+     Bytes=Serialize_ReadData(File,  Data, Full*sizeof(Type)); if(Bytes<0) return -1;
      Total+=Bytes;
      return Total; }
 
@@ -180,7 +183,9 @@ template <class Type>
      if(fwrite(&Full, sizeof(Full), 1, File)!=1) return -1;
      if(fwrite(&Len,  sizeof(Len),  1, File)!=1) return -1;
      if(fwrite(&Rate, sizeof(Rate), 1, File)!=1) return -1;
-     if(fwrite(&Time, sizeof(Time), 1, File)!=1) return -1;
+     double FullTime=Time+Date;
+     if(fwrite(&FullTime, sizeof(FullTime), 1, File)!=1) return -1;
+     // if(fwrite(&Time, sizeof(Time), 1, File)!=1) return -1;
      if(fwrite(&Freq, sizeof(Freq), 1, File)!=1) return -1;
      if(fwrite(Data,  sizeof(Type), Size, File)!=(size_t)Size) return -1;
      return 1; }
@@ -191,6 +196,7 @@ template <class Type>
      if(fread(&Len,  sizeof(Len),  1, File)!=1) return -1;
      if(fread(&Rate, sizeof(Rate), 1, File)!=1) return -1;
      if(fread(&Time, sizeof(Time), 1, File)!=1) return -1;
+     Date=(uint32_t)floor(Time); Time-=Date;
      if(fread(&Freq, sizeof(Freq), 1, File)!=1) return -1;
      Allocate(Size);
      if(fread(Data,  sizeof(Type), Size, File)!=(size_t)Size) return -1;
@@ -225,7 +231,7 @@ template <class Float> // do sliding FFT over a buffer of (complex 8-bit) sample
   int InpSamples=Input.Full/2;                                                         // number of complex,8-bit input samples
   // printf("SlidingFFT() %d point FFT, %d input samples\n", FwdFFT.Size, InpSamples);
   Output.Allocate((InpSamples/WindowSize2+1)*WindowSize); Output.Len=WindowSize;         // output is rows of spectral data
-  Output.Rate=Input.Rate/WindowSize2; Output.Time=Input.Time; Output.Freq=Input.Freq;
+  Output.Rate=Input.Rate/WindowSize2; Output.Time=Input.Time; Output.Date=Input.Date; Output.Freq=Input.Freq;
   uint8_t *InpData = Input.Data;
   std::complex<Float> *OutData = Output.Data;
   int Slides=0;
@@ -271,7 +277,7 @@ template <class Float> // do sliding FFT over a buffer of float/double complex s
   int InpSamples=Input.Full;                                                           // number of complex float/double samples
   // printf("SlidingFFT() %d point FFT, %d input samples\n", FwdFFT.Size, InpSamples);
   Output.Allocate((InpSamples/WindowSize2+1)*WindowSize); Output.Len=WindowSize;         // output is rows of spectral data
-  Output.Rate=Input.Rate/WindowSize2; Output.Time=Input.Time; Output.Freq=Input.Freq;
+  Output.Rate=Input.Rate/WindowSize2; Output.Time=Input.Time; Output.Date=Input.Date; Output.Freq=Input.Freq;
   std::complex<Float> *InpData = Input.Data;
   std::complex<Float> *OutData = Output.Data;
   int Slides=0;
@@ -312,7 +318,7 @@ template <class Float> // do sliding FFT over a buffer of float/double complex s
   int InpSlides=Input.Samples();                                                       //
   // printf("ReconstrFFT() %d point FFT, %d input samples\n", FwdFFT.Size, InpSlides);
   Output.Allocate(1, (InpSlides+1)*WindowSize2);                                     // output is complex time-linear samples
-  Output.Rate=Input.Rate*WindowSize2; Output.Time=Input.Time-1.0/Input.Rate; Output.Freq=Input.Freq;
+  Output.Rate=Input.Rate*WindowSize2; Output.Time=Input.Time-1.0/Input.Rate; Output.Date=Input.Date; Output.Freq=Input.Freq;
   std::complex<Float> *InpData = Input.Data;
   std::complex<Float> *OutData = Output.Data;
   int Slides=0;
@@ -348,7 +354,7 @@ template <class Float> // do sliding FFT over a buffer of float/double complex s
   int InpSamples=Input.Full;                                                           // number of complex float/double samples
   // printf("SlidingFFT() %d point FFT, %d input samples\n", FFT.Size, InpSamples);
   Output.Allocate((InpSamples/WindowSize2+1)*WindowSize); Output.Len=WindowSize;         // output is rows of spectral data
-  Output.Rate=Input.Rate/WindowSize2; Output.Time=Input.Time; Output.Freq=Input.Freq;
+  Output.Rate=Input.Rate/WindowSize2; Output.Time=Input.Time; Output.Date=Input.Date; Output.Freq=Input.Freq;
   std::complex<Float> *InpData = Input.Data;
   std::complex<Float> *OutData = Output.Data;
   int Slides=0;
@@ -389,7 +395,7 @@ template <class Float> // do sliding FFT over a buffer of float/double complex s
   int InpSlides=Input.Samples();                                                       //
   // printf("ReconstrFFT() %d point FFT, %d input samples\n", FwdFFT.Size, InpSlides);
   Output.Allocate(1, (InpSlides+1)*WindowSize2);                                     // output is complex time-linear samples
-  Output.Rate=Input.Rate*WindowSize2; Output.Time=Input.Time-1.0/Input.Rate; Output.Freq=Input.Freq;
+  Output.Rate=Input.Rate*WindowSize2; Output.Time=Input.Time-1.0/Input.Rate; Output.Date=Input.Date; Output.Freq=Input.Freq;
   std::complex<Float> *InpData = Input.Data;
   std::complex<Float> *OutData = Output.Data;
   int Slides=0;
@@ -439,7 +445,7 @@ template <class Float> // do sliding FFT over a buffer of float/double complex s
   int InpSamples=Input.Full/2;                                                         // number of complex,8-bit input samples
   // printf("SlidingFFT(RPI_GPU_FFT) %d point FFT, %d jobs/GPU, %d input samples\n", FwdFFT.Size, Jobs, InpSamples);
   Output.Allocate((InpSamples/WindowSize2+1)*WindowSize); Output.Len=WindowSize;         // output is rows of spectral data
-  Output.Rate=Input.Rate/WindowSize2; Output.Time=Input.Time; Output.Freq=Input.Freq;
+  Output.Rate=Input.Rate/WindowSize2; Output.Time=Input.Time; Output.Date=Input.Date; Output.Freq=Input.Freq;
 
   uint8_t *InpData = Input.Data;
   std::complex<float> *OutData = Output.Data;
@@ -505,7 +511,7 @@ template <class Float>  // convert (complex) spectra to power (energy)
   { for( int Bin=0; Bin<WindowSize; Bin++)
     { OutData[Bin] = Power(InpData[Bin]); }
     InpData+=WindowSize; OutData+=WindowSize; }
-  Output.Time=Input.Time; Output.Rate=Input.Rate; Output.Freq=Input.Freq;
+  Output.Time=Input.Time; Output.Date=Input.Date; Output.Rate=Input.Rate; Output.Freq=Input.Freq;
   Output.Full=Input.Full; }
 
 template <class Float>  // convert (complex) spectra to power (energy) - at same time calc. the average spectra power
@@ -521,7 +527,7 @@ template <class Float>  // convert (complex) spectra to power (energy) - at same
     { Sum += OutData[Bin] = Power(InpData[Bin]); }
     OutData+=Bins; }
   Output.Full=Bins*Slides;
-  Output.Time=Input.Time; Output.Rate=Input.Rate; // Output.Freq=Input.Freq;
+  Output.Time=Input.Time; Output.Date=Input.Date; Output.Rate=Input.Rate; // Output.Freq=Input.Freq;
   return Sum/Output.Full; }
 
 template <class Float>

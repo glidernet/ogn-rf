@@ -33,7 +33,10 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/socket.h>
+
+#ifndef __CYGWIN__
 #include <sys/sendfile.h>
+#endif
 #include <fcntl.h>
 #include <sys/ioctl.h>
 
@@ -128,6 +131,13 @@ class SocketAddress                    // IP address and port
        unsigned short Port=getPort();
        sprintf(TmpString, "%s:%d", IP, Port);
        return TmpString; }
+
+#ifdef __CYGWIN__
+#else
+   char *getRemoteHostName(void)
+   { static struct hostent *HostInfo = gethostbyaddr(&Address, sizeof(Address), AF_INET);
+     return HostInfo->h_name; }
+#endif
 
 } ;
 
@@ -445,12 +455,14 @@ class Socket                   // IP socket
        if(SentBytes>0) Buffer.Done+=SentBytes;
        return SentBytes; }
 
+#ifndef __CYGWIN__
    int SendFile(const char *FileName)
    { int File=open(FileName, O_RDONLY); if(File<0) return File;
      struct stat Stat; fstat(File, &Stat); int Size=Stat.st_size;
      int Ret=sendfile(SocketFile, File, 0, Size);
      close(File);
      return Ret; }
+#endif
 
    // send data (on a non-connected socket)
    int SendTo(const void *Message, int Bytes, SocketAddress Address, int Flags=MSG_NOSIGNAL)
@@ -493,7 +505,7 @@ class Socket                   // IP socket
        return recvfrom(SocketFile, Message, MaxBytes, Flags, (struct sockaddr *) &(Address.Address), &AddressLength); }
 
    // tell if socket is open
-   int isOpen(void)
+   int isOpen(void) const
      { return SocketFile>=0; }
 
    // close the socket
@@ -532,6 +544,7 @@ class UDP_Sender
    }
 
    int Open(void)           { ClearDest(); return Sock.Create_DGRAM(); }
+   int isOpen(void) const   { return Sock.isOpen(); }
    int Close(void)          { return Sock.Close(); }
    int setNonBlocking(void) { return Sock.setNonBlocking(); }
 
@@ -594,6 +607,17 @@ class UDP_Receiver
      return Words<0 ? Words:Words/sizeof(uint32_t); }
 
 } ;
+
+// open TCP client connection to a server: return socket file number
+int openTCP(const char *HostName, int Port=80)
+{ struct hostent *Server = gethostbyname(HostName); if(Server==0) return -1;
+  struct sockaddr_in ServerAddr;
+  memset(&ServerAddr, 0x00, sizeof(struct sockaddr_in));
+  ServerAddr.sin_family = AF_INET;
+  ServerAddr.sin_port = htons(Port);
+  memcpy(&ServerAddr.sin_addr, Server->h_addr, sizeof(ServerAddr.sin_addr));
+  int Socket = socket(AF_INET, SOCK_STREAM, 0); if(Socket<0) return -1;
+  return connect(Socket, (struct sockaddr *)&ServerAddr, sizeof(ServerAddr)); }
 
 #endif // of __SOCKET_H__
 

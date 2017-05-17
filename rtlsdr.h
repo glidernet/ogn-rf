@@ -50,6 +50,8 @@ class RTLSDR
    int           Gains;          // number of possible gain settings
    int           Gain[64];       // [0.1 dB] list of possible gain settings
 
+  uint32_t       FreqRaster;     // [Hz] use only multiples of this base value to avoid tuning errors
+
    int           Bandwidths;
    int           Bandwidth[16];
 
@@ -83,7 +85,7 @@ class RTLSDR
    }
 
   ~RTLSDR()
-   { Close(); }
+   { Close(); FreqRaster=0; }
 
    bool isOpen(void) const { return Device!=0; }
 
@@ -121,7 +123,9 @@ class RTLSDR
    int     setOffsetTuning(int ON=1) { return rtlsdr_set_offset_tuning(Device, ON); }
    int     getOffsetTuning(void)     { return rtlsdr_get_offset_tuning(Device);     }
 
-   int     setCenterFreq(uint32_t Frequency)    { return rtlsdr_set_center_freq(Device, Frequency); } // [Hz]
+   int     setCenterFreq(uint32_t Frequency)
+   { if(FreqRaster) { uint32_t Div=(Frequency+(FreqRaster>>1))/FreqRaster; Frequency=Div*FreqRaster; }
+     return rtlsdr_set_center_freq(Device, Frequency); } // [Hz]
   uint32_t getCenterFreq(void)                  { return rtlsdr_get_center_freq(Device); } // (fast call)
 
    int     setFreqCorrection(int PPM)           { return rtlsdr_set_freq_correction(Device, PPM); } // [PPM] (Part-Per-Million)
@@ -149,7 +153,7 @@ class RTLSDR
    int setTestMode(int Test=1) { return rtlsdr_set_testmode(Device, Test); }  // Enable/Disable test mode - a counter is send, not real data
    int ResetBuffer(void) { return rtlsdr_reset_buffer(Device); }              // obligatory, the docs say, before you start reading
 
-   int setBiasTee(int On=1) { return rtlsdr_set_bias_tee(Device, On); }       // turn on or off the T-bias circuit to power extenal LNA: never use with DC-shorted antennas !
+   int setBiasTee(int On=1) { return rtlsdr_set_bias_tee(Device, On); }       // turn on or off the T-bias circuit to power external LNA: never use with DC-shorted antennas !
 
    double getTime(void) const                                                 // read the system time at this very moment
 #ifndef __MACH__ // _POSIX_TIMERS

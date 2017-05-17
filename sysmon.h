@@ -23,6 +23,7 @@
 #include <unistd.h>
 #include <string.h>
 #include <time.h>
+#include <stdint.h>
 
 #if !defined(__MACH__)   // OSX and Cygwin have no ntp_ calls
 #include <sys/sysinfo.h>
@@ -70,6 +71,18 @@ int getCpuUsage(int &DiffTotal, int &DiffUser, int &DiffSystem) // get CPU usage
 Error:
   fclose(File); return -1; }
 
+int getCpuSerial(long long int &SerialNumber) // get the CPU serial number
+{ FILE *File=fopen("/proc/cpuinfo","rt"); if(File==0) return -1;
+  char Line[128];
+  for( ; ; )
+  { if(fgets(Line, 128, File)==0) goto Error;
+    if(memcmp(Line, "Serial", 6)==0) break;
+  }
+  if(sscanf(Line+6, " : %llx", &SerialNumber)!=1) goto Error;
+  fclose(File); return 0;
+Error:
+  fclose(File); return -1; }
+
 int getCpuUsage(void)                       // get CPU usage - initialize
 { int DiffTotal, DiffUser, DiffSystem; return getCpuUsage(DiffTotal, DiffUser, DiffSystem); }
 
@@ -95,16 +108,49 @@ template <class Float>
   Temperature=0.001*IntValue; return 0; }
 
 template <class Float>
- int getSupplyVoltage(Float &Voltage)
+ int getAcSupplyVoltage(Float &Voltage)
 { int IntValue;
   if(getSysValue(IntValue, "/sys/class/power_supply/ac/voltage_now", "%d")<0) return -1;
   Voltage = 1e-6*IntValue; return 0; }
 
 template <class Float>
- int getSupplyCurrent(Float &Current)
+ int getAcSupplyCurrent(Float &Current)
 { int IntValue;
   if(getSysValue(IntValue, "/sys/class/power_supply/ac/current_now", "%d")<0) return -1;
   Current = 1e-6*IntValue; return 0; }
+
+template <class Float>
+ int getUsbSupplyVoltage(Float &Voltage)
+{ int IntValue;
+  if(getSysValue(IntValue, "/sys/class/power_supply/usb/voltage_now", "%d")<0) return -1;
+  Voltage = 1e-6*IntValue; return 0; }
+
+template <class Float>
+ int getUsbSupplyCurrent(Float &Current)
+{ int IntValue;
+  if(getSysValue(IntValue, "/sys/class/power_supply/usb/current_now", "%d")<0) return -1;
+  Current = 1e-6*IntValue; return 0; }
+
+template <class Float>
+ int getSupplyVoltage(Float &Voltage)
+{ Float UsbVoltage = 0; int UsbErr=getUsbSupplyVoltage(UsbVoltage);
+  Float  AcVoltage = 0; int  AcErr= getAcSupplyVoltage( AcVoltage);
+  if(UsbErr<0) Voltage= AcVoltage; return AcErr;
+  if( AcErr<0) Voltage=UsbVoltage; return UsbErr;
+  if(UsbVoltage>AcVoltage) Voltage=UsbVoltage;
+                    else   Voltage= AcVoltage;
+  return 0; }
+
+template <class Float>
+ int getSupplyCurrent(Float &Current)
+{ Float UsbCurrent = 0; int UsbErr=getUsbSupplyCurrent(UsbCurrent);
+  Float  AcCurrent = 0; int  AcErr= getAcSupplyCurrent( AcCurrent);
+  if(UsbErr<0) Current= AcCurrent; return AcErr;
+  if( AcErr<0) Current=UsbCurrent; return UsbErr;
+  if(UsbCurrent>AcCurrent) Current=UsbCurrent;
+                    else   Current= AcCurrent;
+  return 0; }
+
 
 /*
 template <class Float>

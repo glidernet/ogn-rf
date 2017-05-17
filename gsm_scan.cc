@@ -129,6 +129,7 @@ int main(int argc, char **argv)
   RTLSDR SDR;     // DVB-T device with the RTL2832U control chip
 
   int RxDevice       =         0;    // [Index] device index for RTLSDR device
+  int FreqRaster     =     28125;    // [Hz] 28800000>>10
   int RxCrystalCorr  =         0;    // [PPM] crystal frequency correction for the DVB-T receiver
   int RxGain         =       200;    // [0.1dB] receiver gain - low default gain for the GSM band as signals are strong
   int RxOffsetTuning =         0;    // [bool]
@@ -221,6 +222,7 @@ int main(int argc, char **argv)
   { SDR.setTunerGainAuto(); printf("Tuner gain set to automatic\n"); }  // automatic gain control
 
   SDR.setOffsetTuning(RxOffsetTuning); if(RxOffsetTuning) printf("Offset tuning activated\n");
+  SDR.FreqRaster=FreqRaster;
 
   printf("\n");
 
@@ -234,10 +236,11 @@ int main(int argc, char **argv)
   int Freq=LowerFreq+GuardBand+FreqStep/2;
   for(int Scan=0; Scan<Scans; Scan++, Freq+=FreqStep)
   { SDR.setCenterFreq(Freq);
+    int ActualFreq=SDR.getCenterFreq();
     SDR.ResetBuffer();
     int Samples=SDR.Read(Input, SamplesPerScan);                                    // acquire RF I/Q data
     // printf("SDR.Read(, %5.3fMHz) => %d samples\n", 1e-6*Freq, Samples);
-    if(Samples<=0) { printf("SDR.Read(%5.1fMHz) failed\n", 1e-6*Freq); continue; }
+    if(Samples<=0) { printf("SDR.Read(%5.1fMHz) failed\n", 1e-6*ActualFreq); continue; }
     SlidingFFT(Spectra, Input, FFT, Window);                                        // process with sliding FFT
     SpectraPower(Power, Spectra);                                                   // we only want the amplitudes (power)
 #ifdef WRITE_SPECTROGRAM
@@ -248,8 +251,8 @@ int main(int argc, char **argv)
     // double EstPPM=0;
     // EstimatePPM(EstPPM, Power);
 
-    FloatType FirstBinFreq = Freq-BinWidth*FFTsize2;          // [Hz] center frequency of the first FFT bin
-    FloatType LastBinFreq  = Freq+BinWidth*FFTsize2;          // [Hz] center frequency of the one-after-the-last FFT bin
+    FloatType FirstBinFreq = ActualFreq-BinWidth*FFTsize2;    // [Hz] center frequency of the first FFT bin
+    FloatType LastBinFreq  = ActualFreq+BinWidth*FFTsize2;    // [Hz] center frequency of the one-after-the-last FFT bin
     int Chan = (int)ceil(FirstBinFreq/GSM_ChannelWidth);      // integer channel number corr. to the first FFT bin (GSM channels are on multiples of 200kHz)
     for( ; ; Chan++)                                          // loop over (possible) channels in this scan
     { FloatType CenterFreq=Chan*GSM_ChannelWidth; if(CenterFreq>=LastBinFreq) break; // center frequency of the channel
