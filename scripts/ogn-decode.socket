@@ -1,0 +1,6 @@
+[Socket]
+ListenFIFO=/var/run/ogn-decode.fifo
+SocketUser=ogn
+
+[Install]
+WantedBy=sockets.target
