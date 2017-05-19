@@ -89,7 +89,7 @@ unsigned gpu_fft_base_exec_direct (
     struct GPU_FFT_BASE *base,
     int num_qpus) {
 
-    // unsigned q, t;
+    unsigned q, t;
 
     base->peri[V3D_DBCFG] = 0; // Disallow IRQ
     base->peri[V3D_DBQITE] = 0; // Disable IRQ
@@ -100,7 +100,7 @@ unsigned gpu_fft_base_exec_direct (
 
     base->peri[V3D_SRQCS] = (1<<7) | (1<<8) | (1<<16); // Reset error bit and counts
 
-    for (int q=0; q<num_qpus; q++) { // Launch shader(s)
+    for (q=0; q<num_qpus; q++) { // Launch shader(s)
         base->peri[V3D_SRQUA] = base->vc_unifs[q];
         base->peri[V3D_SRQPC] = base->vc_code;
     }
