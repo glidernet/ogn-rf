@@ -162,7 +162,7 @@ class SocketBuffer             // data buffer for IP sockets
      { if(Data) { free(Data); Data=0; }
        Allocated=0; Len=0; Done=0; }
 
-   size_t Relocate(size_t Size)
+   size_t Relocate(size_t Size) // Returns 0 on failure
      { if(Size<=Allocated) return Allocated;
        // printf("Relocate(%d)",Size);
        size_t Units=(Size+AllocUnit-1)/AllocUnit; Size=Units*AllocUnit;
@@ -199,7 +199,7 @@ class SocketBuffer             // data buffer for IP sockets
      { FILE *File = fopen(FileName,"r"); if(File==0) return -1;
        int Total=0;
        for( ; ; )
-       { if(Relocate(Len+AllocUnit)<0) { fclose(File); return -1; }
+       { if(Relocate(Len+AllocUnit)==0) { fclose(File); return -1; }
          int ToRead = Allocated-Len;
          int Read = fread(Data+Len, 1, ToRead, File);
          if(Read<0) { fclose(File); return -1; }
