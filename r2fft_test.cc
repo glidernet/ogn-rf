@@ -5,6 +5,7 @@
 #include "fft.h"
 
 #define Float double
+#define FFTsize 1024
 
 template <class Type>
  double Power(std::complex<Type> X)
@@ -15,7 +16,6 @@ int main(int argc, char *argv[])
   r2FFT<Float> FFT;
   DFT1d<Float> RefFFT;
 
-  int FFTsize = 1024;
   std::complex<Float> Buffer[FFTsize];
 
   FFT.Preset(FFTsize);
