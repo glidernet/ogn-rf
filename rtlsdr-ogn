@@ -48,7 +48,7 @@ get_location () {
    curl -s --request GET --url https://freegeoip.app/xml/ \
    --header 'accept: application/mxl' \
    --header 'content-type: application/xml' \
-   --output $iplocation_file || fail "curl returned an error when gtting iplocation"
+   --output $iplocation_file || fail "curl returned an error when getting iplocation"
 
   lat=$(grep "Latitude" $iplocation_file | sed 's/[^0-9,.,-]*//g' | sed 's/^\([0-9,.,-]*\)/\1000/g')
   long=$(grep "Longitude" $iplocation_file | sed 's/[^0-9,.,-]*//g' | sed 's/^\([0-9,.,-]*\)/\1000/g')
