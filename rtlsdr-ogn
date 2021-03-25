@@ -6,7 +6,7 @@
 # Default-Start:     2 3 4 5
 # Default-Stop:      0 1 6
 # Short-Description: OGN receiver
-# Description:       OGN receiver - Open Glider Network - http://glidernet.org/
+# Description:       OGN reciver - Open Glider Network - http://glidernet.org/
 ### END INIT INFO
 
 # chkconfig: 2345 98 2
@@ -25,6 +25,10 @@ logdir=/var/log/$prog
 shells=/var/run/$prog
 chroot=/mnt/ramdisk
 
+enable_iplocation="true"
+rtlconffile=$(grep -v "#" $conf | grep rtlsdr-ogn | grep conf | tail -1 | awk '{print $3"/"$NF}')
+iplocation_file=/tmp/iplocation.txt
+
 if [ -d $chroot ]
 then
   CHROOT="chroot $chroot"
@@ -37,6 +41,21 @@ fail () {
 
 echo_failure () {
   echo " [failed]"
+}
+
+
+get_location () {
+   curl -s --request GET --url https://freegeoip.app/xml/ \
+   --header 'accept: application/mxl' \
+   --header 'content-type: application/xml' \
+   --output $iplocation_file || fail "curl returned an error when gtting iplocation"
+
+  lat=$(grep "Latitude" $iplocation_file | sed 's/[^0-9,.,-]*//g' | sed 's/^\([0-9,.,-]*\)/\1000/g')
+  long=$(grep "Longitude" $iplocation_file | sed 's/[^0-9,.,-]*//g' | sed 's/^\([0-9,.,-]*\)/\1000/g')
+  [[ $lat  =~ ^[+-]?[0-9]+\.?[0-9]*$ ]] || fail "wrong latitude"
+  [[ $long =~ ^[+-]?[0-9]+\.?[0-9]*$ ]] || fail "wrong longitude"
+  sed -i 's/\(Latitude.*=\)\(.*; #\)/\1   '"$lat"'; #/g' $rtlconffile
+  sed -i 's/\(Longitude.*=\)\(.*; #\)/\1   '"$long"'; #/g' $rtlconffile
 }
 
 checkpid () {
@@ -82,7 +101,8 @@ launch () {
     fi
 
     # Wait for time to be sync before launching
-    while true; do /usr/sbin/ntp-wait -v;  if [ $? -eq 0 ]; then break; fi; sleep 2; done
+    #while true; do /usr/sbin/ntp-wait -v;  if [ $? -eq 0 ]; then break; fi; sleep 2; done
+    while true; do service ntp stop; sleep 1; service ntp start; /usr/sbin/ntp-wait -v -n 5;  if [ $? -eq 0 ]; then break; fi; sleep 2; done
 
     # start shellbox as other user
     echo -n Starting: $PORT $USER $DIR $COMMAND
@@ -112,6 +132,7 @@ launch () {
 start () {
   [ -r $conf ] || fail "$conf not readable"
   [ -x $exe ] || fail "$exe is not executable"
+  if [ "$enable_iplocation" = "true" ] ; then get_location ; fi
   launch $*
   touch /var/lock/$prog
 }
