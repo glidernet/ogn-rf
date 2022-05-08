@@ -17,7 +17,7 @@ class FreqPlan
           if(Plan==2) { BaseFreq=902200000; ChanSepar=400000; Channels=65; } // USA
      else if(Plan==3) { BaseFreq=917000000; ChanSepar=400000; Channels=24; } // Australia and South America
      else if(Plan==4) { BaseFreq=869250000; ChanSepar=200000; Channels= 1; } // New Zeeland
-     else if(Plan==5) { BaseFreq=916200000; ChanSepar=200000; Channels- 1; } // Israel
+     else if(Plan==5) { BaseFreq=916200000; ChanSepar=200000; Channels= 1; } // Israel
      else             { BaseFreq=868200000; ChanSepar=200000; Channels= 2; } // Europe
    }
 
